@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+.env/
+.venv/
+
+# Environment variables
+.env
+*.env
+
+# Video and frame outputs
+*.mp4
+*.avi
+*.mov
+frames/
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+
+# Terraform state
+*.tfstate
+*.tfstate.backup
+.terraform/
+
+# Node.js
+node_modules/
