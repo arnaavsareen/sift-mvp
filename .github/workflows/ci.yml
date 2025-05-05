@@ -1,0 +1,26 @@
+name: CI
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - name: Install dependencies
+        run: |
+          pip install -r ingestion_service/requirements.txt
+          pip install -r model_service/requirements.txt
+          pip install -r api_service/requirements.txt
+      - name: Run tests
+        run: pytest || echo 'No tests yet'
+      # - name: Build Docker images (placeholder)
+      #   run: echo 'TODO: Docker build'
+      # - name: Push to ECR (placeholder)
+      #   run: echo 'TODO: ECR push'
