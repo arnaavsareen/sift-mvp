@@ -1,3 +1,20 @@
-fastapi
-torch
-yolov5
+fastapi>=0.95.0,<0.100.0
+uvicorn>=0.20.0
+pydantic>=1.10.0,<2.0.0
+python-dotenv==1.0.0
+# AWS packages
+boto3>=1.28.0
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+alembic>=1.10.0
+# ML packages - Lambda compatible versions
+torch==2.0.0
+torchvision==0.15.1
+ultralytics==8.0.145  # For YOLOv8
+opencv-python==4.8.0.74
+numpy==1.24.3
+pillow==9.5.0
+# Utilities
+python-multipart>=0.0.6
+loguru>=0.7.0
