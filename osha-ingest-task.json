@@ -1,0 +1,31 @@
+{
+  "family": "osha-ingest-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "executionRoleArn": "arn:aws:iam::529710251669:role/ecsTaskExecutionRole",
+  "cpu": "256",
+  "memory": "512",
+  "containerDefinitions": [
+    {
+      "name": "osha-ingest",
+      "image": "529710251669.dkr.ecr.us-east-1.amazonaws.com/osha-platform:ingest",
+      "essential": true,
+      "environment": [
+        {"name": "CAMERA_URL", "value": "s3://osha-mvp-bucket/videos/test1.mp4"},
+        {"name": "FRAME_INTERVAL", "value": "5"},
+        {"name": "S3_BUCKET", "value": "osha-mvp-bucket"},
+        {"name": "SQS_QUEUE_URL", "value": "https://sqs.us-east-1.amazonaws.com/529710251669/OshaFrameQueue"},
+        {"name": "AWS_REGION", "value": "us-east-1"}
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/osha-ingest",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}

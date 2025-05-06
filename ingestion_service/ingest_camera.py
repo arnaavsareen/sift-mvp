@@ -69,14 +69,36 @@ def create_boto_clients(region: str):
 
 
 def open_video_source(url: str) -> cv2.VideoCapture:
-    """Attempt to open the video source; retry as file if initial RTSP fails."""
+    """Attempt to open the video source; supports RTSP, local files, and S3 paths."""
+    # Check if it's an S3 path (s3://bucket/key format)
+    if url.startswith('s3://'):
+        logger.info(f"Detected S3 path: {url}")
+        parts = url.replace('s3://', '').split('/', 1)
+        if len(parts) != 2:
+            logger.error(f"Invalid S3 path format: {url}. Expected s3://bucket/key")
+            sys.exit(1)
+            
+        bucket, key = parts
+        s3_client = boto3.client('s3')
+        local_path = Path(f"/tmp/{Path(key).name}")
+        
+        try:
+            logger.info(f"Downloading {bucket}/{key} to {local_path}")
+            s3_client.download_file(bucket, key, str(local_path))
+            url = str(local_path)
+        except Exception as e:
+            logger.error(f"Failed to download video from S3: {e}")
+            sys.exit(1)
+    
+    # Try opening as camera/RTSP first
     cap = cv2.VideoCapture(url)
     if not cap.isOpened():
-        logger.warning(f"Cannot open camera '{url}', trying as file path.")
+        logger.warning(f"Cannot open camera/stream '{url}', trying as file path.")
         cap = cv2.VideoCapture(str(Path(url)))
         if not cap.isOpened():
             logger.error(f"Unable to open video source '{url}'.")
             sys.exit(1)
+    
     return cap
 
 
