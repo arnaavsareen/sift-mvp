@@ -1,0 +1,95 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.pytest_cache/
+
+# Node.js / React
+node_modules/
+frontend/node_modules/
+frontend/build/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+frontend/.pnp
+frontend/.pnp.js
+frontend/coverage/
+
+# Data files
+data/screenshots/*
+!data/screenshots/.gitkeep
+# Keep ML models in version control since they're essential
+# data/models/*
+# !data/models/.gitkeep
+
+# Environment variables
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+*.sublime-workspace
+
+# Database
+*.sqlite3
+*.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# Temporary files
+*.tmp
+*.bak
+.*.sw?
+.~lock.*
+*~
+tmp/
+temp/
