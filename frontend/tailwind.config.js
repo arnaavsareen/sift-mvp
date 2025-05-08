@@ -1,4 +1,4 @@
-/** @type {import('tailwindcss').Config} */
+// frontend/tailwind.config.js
 module.exports = {
   content: [
     "./src/**/*.{js,jsx,ts,tsx}",
@@ -7,65 +7,55 @@ module.exports = {
     extend: {
       colors: {
         primary: {
-          50: '#f0f9ff',
-          100: '#e0f2fe',
-          200: '#bae6fd',
-          300: '#7dd3fc',
-          400: '#38bdf8',
-          500: '#0ea5e9',
-          600: '#0284c7',
-          700: '#0369a1',
-          800: '#075985',
-          900: '#0c4a6e',
+          DEFAULT: '#65704F',
+          50: '#F4F5F2',
+          100: '#E9ECE4',
+          200: '#D3D9C9',
+          300: '#BDC6AF',
+          400: '#A7B294',
+          500: '#8C9D7A',
+          600: '#65704F', // Your primary color
+          700: '#525940',
+          800: '#3F4331',
+          900: '#2B2D22',
         },
         secondary: {
-          50: '#f8fafc',
-          100: '#f1f5f9',
-          200: '#e2e8f0',
-          300: '#cbd5e1',
-          400: '#94a3b8',
-          500: '#64748b',
-          600: '#475569',
-          700: '#334155',
-          800: '#1e293b',
-          900: '#0f172a',
+          DEFAULT: '#CEC5B0',
+          50: '#FAF9F7',
+          100: '#F5F3EF',
+          200: '#ECE8DF',
+          300: '#E3DECF',
+          400: '#DAD3C0',
+          500: '#CEC5B0', // Your secondary color
+          600: '#B8AA8D',
+          700: '#A38F6A',
+          800: '#82714F',
+          900: '#5F523A',
         },
-        danger: {
-          50: '#fef2f2',
-          100: '#fee2e2',
-          200: '#fecaca',
-          300: '#fca5a5',
-          400: '#f87171',
-          500: '#ef4444',
-          600: '#dc2626',
-          700: '#b91c1c',
-          800: '#991b1b',
-          900: '#7f1d1d',
+        surface: {
+          DEFAULT: '#243730',
+          light: '#384842', // Your border color
+          dark: '#1A2924',
         },
-        success: {
-          50: '#f0fdf4',
-          100: '#dcfce7',
-          200: '#bbf7d0',
-          300: '#86efac',
-          400: '#4ade80',
-          500: '#22c55e',
-          600: '#16a34a',
-          700: '#15803d',
-          800: '#166534',
-          900: '#14532d',
-        },
-        warning: {
-          50: '#fffbeb',
-          100: '#fef3c7',
-          200: '#fde68a',
-          300: '#fcd34d',
-          400: '#fbbf24',
-          500: '#f59e0b',
-          600: '#d97706',
-          700: '#b45309',
-          800: '#92400e',
-          900: '#78350f',
-        },
+        background: '#2B3933', // Your background color
+        border: '#384842', // Your border color
+        light: '#F7E6CA', // Your light color
+        success: '#4CAF50', // Your success color
+        warning: '#FF9800', // Your warning color
+        danger: '#F44336', // Your danger color
+        info: '#2196F3', // Your info color
+      },
+      backgroundColor: {
+        'dark': '#2B3933', // Your background color
+        'darker': '#243730', // Your surface color
+        'lighter': '#384842', // Your border color
+      },
+      textColor: {
+        'dark-text': '#F7E6CA', // Your light color
+        'dark-text-muted': '#CEC5B0', // Your secondary color
+      },
+      borderColor: {
+        DEFAULT: '#384842', // Your border color
       },
     },
   },
