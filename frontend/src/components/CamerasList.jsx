@@ -326,15 +326,15 @@ const CamerasList = () => {
             ></div>
             
             {/* Modal */}
-            <div className="bg-white rounded-lg overflow-hidden shadow-xl transform transition-all sm:max-w-lg sm:w-full z-10">
-              <div className="px-6 py-4 bg-primary-700 text-white">
-                <h3 className="text-lg font-medium">Add Camera</h3>
+            <div className="bg-white rounded-xl overflow-hidden shadow-2xl transform transition-all sm:max-w-lg sm:w-full z-10 border border-gray-200">
+              <div className="px-6 py-4 bg-white border-b border-gray-100">
+                <h3 className="text-xl font-semibold text-gray-900">Add Camera</h3>
               </div>
               
               <form onSubmit={handleSubmit}>
                 <div className="p-6 space-y-4">
                   <div>
-                    <label htmlFor="name" className="form-label">
+                    <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
                       Camera Name
                     </label>
                     <input
@@ -343,13 +343,13 @@ const CamerasList = () => {
                       name="name"
                       value={formData.name}
                       onChange={handleInputChange}
-                      className="form-input"
+                      className="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 placeholder-gray-400 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm"
                       required
                     />
                   </div>
                   
                   <div>
-                    <label htmlFor="url" className="form-label">
+                    <label htmlFor="url" className="block text-sm font-medium text-gray-700 mb-1">
                       Stream URL
                     </label>
                     <input
@@ -358,7 +358,7 @@ const CamerasList = () => {
                       name="url"
                       value={formData.url}
                       onChange={handleInputChange}
-                      className="form-input"
+                      className="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 placeholder-gray-400 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm"
                       placeholder="rtsp:// or http:// stream URL"
                       required
                     />
@@ -368,7 +368,7 @@ const CamerasList = () => {
                   </div>
                   
                   <div>
-                    <label htmlFor="location" className="form-label">
+                    <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-1">
                       Location (Optional)
                     </label>
                     <input
@@ -377,7 +377,7 @@ const CamerasList = () => {
                       name="location"
                       value={formData.location}
                       onChange={handleInputChange}
-                      className="form-input"
+                      className="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 placeholder-gray-400 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm"
                       placeholder="e.g., Factory Floor, Assembly Line 1"
                     />
                   </div>
@@ -397,17 +397,17 @@ const CamerasList = () => {
                   </div>
                 </div>
                 
-                <div className="px-6 py-4 bg-gray-50 flex justify-end space-x-2">
+                <div className="px-6 py-4 bg-gray-50 flex justify-end space-x-2 border-t border-gray-100">
                   <button
                     type="button"
-                    className="btn-secondary"
+                    className="inline-flex items-center px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 font-medium text-sm transition-colors"
                     onClick={() => setShowAddModal(false)}
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="btn-primary"
+                    className="inline-flex items-center px-4 py-2 rounded-lg bg-primary-600 text-white hover:bg-primary-700 font-medium text-sm transition-colors shadow-sm"
                   >
                     Add Camera
                   </button>

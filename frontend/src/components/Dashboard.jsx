@@ -90,14 +90,16 @@ const Dashboard = () => {
   
   // Prepare chart data
   const prepareChartData = () => {
-    if (!timeline) return null;
-    
+    if (!timeline || !Array.isArray(timeline.timeline) || timeline.timeline.length === 0) return null;
+
+    // Only use valid dates for labels
     const labels = timeline.timeline.map(item => {
-      // Format the time string for better readability
       const timeDate = new Date(item.time);
-      return timeDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return isNaN(timeDate.getTime())
+        ? ''
+        : timeDate.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     });
-    
+
     // Get all violation types
     const violationTypes = new Set();
     timeline.timeline.forEach(item => {
@@ -105,39 +107,51 @@ const Dashboard = () => {
         violationTypes.add(type);
       });
     });
-    
+
+    // Modern color palette
+    const palette = [
+      '#10b981', // emerald
+      '#6366f1', // indigo
+      '#f59e42', // orange
+      '#ef4444', // red
+      '#3b82f6', // blue
+      '#a855f7', // purple
+      '#fbbf24', // yellow
+    ];
+
     // Prepare datasets
     const datasets = Array.from(violationTypes).map((type, index) => {
-      // Generate color based on violation type for consistency
-      const violationColors = {
-        no_hardhat: 'rgb(235, 87, 87)',
-        no_vest: 'rgb(242, 153, 74)',
-        no_gloves: 'rgb(168, 92, 249)',
-        no_goggles: 'rgb(106, 171, 218)',
-        no_boots: 'rgb(134, 207, 59)',
-      };
-      
-      const color = violationColors[type] || `hsl(${(index * 137) % 360}, 70%, 50%)`;
-      
+      const color = palette[index % palette.length];
       return {
         label: type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
         data: timeline.timeline.map(item => item.by_type?.[type] || 0),
         borderColor: color,
-        backgroundColor: color.replace('rgb', 'rgba').replace(')', ', 0.2)'),
-        tension: 0.3,
+        backgroundColor: color + '22', // subtle fill
+        pointBackgroundColor: color,
+        pointBorderColor: '#fff',
+        pointRadius: 5,
+        pointHoverRadius: 8,
+        tension: 0.4,
+        borderWidth: 3,
+        fill: false,
       };
     });
-    
+
     // Add total line
     datasets.push({
       label: 'Total',
       data: timeline.timeline.map(item => item.total),
-      borderColor: 'rgb(75, 192, 192)',
-      backgroundColor: 'rgba(75, 192, 192, 0.2)',
-      borderWidth: 2,
-      tension: 0.3,
+      borderColor: '#10b981',
+      backgroundColor: '#10b98122',
+      pointBackgroundColor: '#10b981',
+      pointBorderColor: '#fff',
+      pointRadius: 6,
+      pointHoverRadius: 10,
+      borderWidth: 4,
+      tension: 0.4,
+      fill: false,
     });
-    
+
     return {
       labels,
       datasets,
@@ -149,22 +163,70 @@ const Dashboard = () => {
   // Chart options
   const chartOptions = {
     responsive: true,
+    maintainAspectRatio: false,
     plugins: {
       legend: {
         position: 'top',
+        labels: {
+          padding: 20,
+          usePointStyle: true,
+          pointStyle: 'circle',
+          font: { size: 15, weight: '500' },
+        },
       },
       title: {
-        display: true,
-        text: 'Alert Trends',
+        display: false,
+      },
+      tooltip: {
+        enabled: true,
+        backgroundColor: '#111827',
+        titleColor: '#fff',
+        bodyColor: '#fff',
+        borderColor: '#10b981',
+        borderWidth: 1,
+        padding: 12,
+        caretSize: 8,
+        cornerRadius: 8,
+        displayColors: true,
       },
     },
     scales: {
       y: {
         beginAtZero: true,
+        grid: {
+          color: 'rgba(0,0,0,0.06)',
+        },
         title: {
           display: true,
           text: 'Number of Alerts',
+          font: { size: 13, weight: '500' },
         },
+        ticks: {
+          color: '#6b7280',
+          font: { size: 13 },
+        },
+      },
+      x: {
+        grid: {
+          display: false,
+        },
+        ticks: {
+          color: '#6b7280',
+          font: { size: 13 },
+          maxRotation: 30,
+          minRotation: 0,
+          autoSkip: true,
+          maxTicksLimit: 10,
+        },
+      },
+    },
+    interaction: {
+      intersect: false,
+      mode: 'index',
+    },
+    elements: {
+      line: {
+        borderJoinStyle: 'round',
       },
     },
   };
@@ -179,7 +241,7 @@ const Dashboard = () => {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-main mx-auto"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto"></div>
           <p className="mt-4 text-gray-600">Loading dashboard...</p>
         </div>
       </div>
@@ -188,12 +250,12 @@ const Dashboard = () => {
   
   if (error) {
     return (
-      <div className="text-center p-6 bg-danger-50 text-danger-700 rounded-lg">
+      <div className="text-center p-8 bg-red-50 text-red-700 rounded-xl">
         <FaExclamationTriangle className="mx-auto h-12 w-12 mb-4" />
         <h2 className="text-2xl font-bold mb-2">Error</h2>
         <p>{error}</p>
         <button
-          className="mt-4 btn-primary"
+          className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
           onClick={() => window.location.reload()}
         >
           Retry
@@ -207,29 +269,41 @@ const Dashboard = () => {
       {/* Time range selector */}
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-4xl font-extrabold text-green-main leading-tight mb-1">Safety Monitoring Dashboard</h1>
-<p className="text-lg text-gray-700 mb-6">Real-time PPE compliance monitoring</p>
+          <h1 className="text-3xl font-bold text-gray-900 leading-tight mb-2">Safety Monitoring Dashboard</h1>
+          <p className="text-lg text-gray-600">Real-time Safety and Compliance Monitoring</p>
         </div>
-        <div className="flex space-x-2 bg-green-main text-white p-1 rounded-xl shadow-sm">
+        <div className="flex space-x-2 bg-white p-1 rounded-lg shadow-sm border border-gray-200">
           <button 
             onClick={() => handleTimeRangeChange('24h')} 
-            className={`flex items-center px-3 py-1.5 text-xs font-medium rounded-full transition-all duration-200 ${timeRange === '24h' ? 'bg-green-main text-white shadow' : 'text-green-main bg-white border border-green-main hover:bg-green-main/10'}`}
+            className={`flex items-center px-3 py-1.5 text-sm font-medium rounded-md transition-all duration-200 ${
+              timeRange === '24h' 
+                ? 'bg-primary-50 text-primary-600' 
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
           >
-            <FaClock className="mr-1.5 h-3.5 w-3.5" />
+            <FaClock className="mr-1.5 h-4 w-4" />
             24h
           </button>
           <button 
             onClick={() => handleTimeRangeChange('7d')} 
-            className={`flex items-center px-3 py-1.5 text-xs font-medium rounded-full transition-all duration-200 ${timeRange === '7d' ? 'bg-green-main text-white shadow' : 'text-green-main bg-white border border-green-main hover:bg-green-main/10'}`}
+            className={`flex items-center px-3 py-1.5 text-sm font-medium rounded-md transition-all duration-200 ${
+              timeRange === '7d' 
+                ? 'bg-primary-50 text-primary-600' 
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
           >
-            <FaCalendarAlt className="mr-1.5 h-3.5 w-3.5" />
+            <FaCalendarAlt className="mr-1.5 h-4 w-4" />
             7d
           </button>
           <button 
             onClick={() => handleTimeRangeChange('30d')} 
-            className={`flex items-center px-3 py-1.5 text-xs font-medium rounded-full transition-all duration-200 ${timeRange === '30d' ? 'bg-green-main text-white shadow' : 'text-green-main bg-white border border-green-main hover:bg-green-main/10'}`}
+            className={`flex items-center px-3 py-1.5 text-sm font-medium rounded-md transition-all duration-200 ${
+              timeRange === '30d' 
+                ? 'bg-primary-50 text-primary-600' 
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
           >
-            <FaCalendarAlt className="mr-1.5 h-3.5 w-3.5" />
+            <FaCalendarAlt className="mr-1.5 h-4 w-4" />
             30d
           </button>
         </div>
@@ -238,271 +312,159 @@ const Dashboard = () => {
       {/* Overview cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Cameras card */}
-        <section className="bg-white rounded-2xl shadow-xl hover:shadow-2xl transition-shadow duration-300 p-6 flex flex-col gap-3 border border-green-main" aria-label="Dashboard Card">
+        <section className="bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow duration-300 p-6 flex flex-col gap-3 border border-gray-200" aria-label="Dashboard Card">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-sm font-semibold text-green-main">Cameras</p>
+              <p className="text-sm font-medium text-gray-600">Cameras</p>
               <div className="mt-2 flex items-baseline">
-                <p className="text-4xl font-bold text-green-main">
+                <p className="text-3xl font-bold text-gray-900">
                   {overview?.cameras?.monitoring || 0} / {overview?.cameras?.total || 0}
                 </p>
-                <p className="ml-2 text-sm text-green-main">active</p>
+                <p className="ml-2 text-sm text-gray-500">active</p>
               </div>
             </div>
-            <div className="rounded-full bg-green-main text-white p-3 shadow-lg">
-              <FaVideo className="h-7 w-7 text-white" />
-            </div>
-          </div>
-          <div className="mt-4 pt-4 border-t border-gray-100">
-            <div className="flex justify-between items-center">
-              <span className="text-xs text-gray-500">Stream Health</span>
-              <div className="flex items-center">
-                <span className="inline-block w-2 h-2 rounded-full bg-success-500 mr-1"></span>
-                <span className="text-xs font-medium text-success-600">All Online</span>
-              </div>
+            <div className="p-3 rounded-lg bg-primary-50">
+              <FaVideo className="h-6 w-6 text-primary-600" />
             </div>
           </div>
           <div className="mt-4">
-            <Link
-              to="/cameras"
-              className="text-sm font-bold text-white bg-green-main text-white hover:bg-green-main text-white px-4 py-2 rounded-lg shadow transition-colors flex items-center"
-            >
-              View all cameras
-              <svg className="w-4 h-4 ml-1" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L12.586 11H5a1 1 0 110-2h7.586l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
-              </svg>
-            </Link>
+            <div className="flex items-center text-sm">
+              <span className="text-gray-600">Status:</span>
+              <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700">
+                {overview?.cameras?.status || 'Unknown'}
+              </span>
+            </div>
           </div>
         </section>
         
         {/* Alerts card */}
-        <section className="bg-white rounded-2xl shadow-xl hover:shadow-2xl transition-shadow duration-300 p-6 flex flex-col gap-3 border border-green-main" aria-label="Dashboard Card">
+        <section className="bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow duration-300 p-6 flex flex-col gap-3 border border-gray-200" aria-label="Dashboard Card">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-sm font-semibold text-green-main">Recent Alerts</p>
+              <p className="text-sm font-medium text-gray-600">Alerts</p>
               <div className="mt-2 flex items-baseline">
-                <p className="text-4xl font-bold text-green-main">
+                <p className="text-3xl font-bold text-gray-900">
                   {overview?.alerts?.total || 0}
                 </p>
-                <p className="ml-2 text-sm text-green-main">
-                  in the last {overview?.time_range_hours || 24}h
-                </p>
+                <p className="ml-2 text-sm text-gray-500">total</p>
               </div>
             </div>
-            <div className="rounded-full bg-danger-600 p-3 shadow-lg">
-              <FaBell className="h-7 w-7 text-white" />
-            </div>
-          </div>
-          <div className="mt-4 pt-4 border-t border-gray-100">
-            <div className="flex justify-between items-center">
-              <span className="text-xs text-gray-500">Recent Activity</span>
-              {(overview?.alerts?.total || 0) > 0 ? (
-                <div className="flex items-center">
-                  <FaArrowUp className="h-3 w-3 text-danger-500 mr-1" />
-                  <span className="text-xs font-medium text-danger-600">Alert trending</span>
-                </div>
-              ) : (
-                <div className="flex items-center">
-                  <FaArrowDown className="h-3 w-3 text-success-500 mr-1" />
-                  <span className="text-xs font-medium text-success-600">No recent alerts</span>
-                </div>
-              )}
+            <div className="p-3 rounded-lg bg-red-50">
+              <FaBell className="h-6 w-6 text-red-600" />
             </div>
           </div>
           <div className="mt-4">
-            <Link
-              to="/alerts"
-              className="text-sm font-bold text-white bg-green-main text-white hover:bg-green-main text-white px-4 py-2 rounded-lg shadow transition-colors flex items-center"
-            >
-              View all alerts
-              <svg className="w-4 h-4 ml-1" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L12.586 11H5a1 1 0 110-2h7.586l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
-              </svg>
-            </Link>
+            <div className="flex items-center text-sm">
+              <span className="text-gray-600">Active:</span>
+              <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-50 text-yellow-700">
+                {overview?.alerts?.active || 0} alerts
+              </span>
+            </div>
           </div>
         </section>
         
-        {/* Compliance score card */}
-        <section className="bg-white rounded-2xl shadow-xl hover:shadow-2xl transition-shadow duration-300 p-6 flex flex-col gap-3 border border-green-main" aria-label="Dashboard Card">
+        {/* Compliance card */}
+        <section className="bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow duration-300 p-6 flex flex-col gap-3 border border-gray-200" aria-label="Dashboard Card">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-sm font-semibold text-green-main">Compliance Score</p>
+              <p className="text-sm font-medium text-gray-600">Compliance</p>
               <div className="mt-2 flex items-baseline">
-                <p className="text-4xl font-bold text-white">
-                  {overview?.compliance_score || 'N/A'}%
+                <p className="text-3xl font-bold text-gray-900">
+                  {overview?.compliance?.rate || 0}%
                 </p>
+                <p className="ml-2 text-sm text-gray-500">rate</p>
               </div>
             </div>
-            <div className={`rounded-full p-3 ${
-              (overview?.compliance_score || 0) > 80 
-                ? 'bg-success-600' 
-                : (overview?.compliance_score || 0) > 50 
-                  ? 'bg-warning-600' 
-                  : 'bg-danger-600'
-            }`}>
-              {(overview?.compliance_score || 0) > 80 ? (
-                <FaCheckCircle className="h-6 w-6 text-success-600" />
-              ) : (overview?.compliance_score || 0) > 50 ? (
-                <FaExclamationCircle className="h-6 w-6 text-warning-600" />
-              ) : (
-                <FaTimes className="h-7 w-7 text-white" />
-              )}
+            <div className="p-3 rounded-lg bg-emerald-50">
+              <FaHardHat className="h-6 w-6 text-emerald-600" />
             </div>
           </div>
-          <div className="mt-4 pt-4 border-t border-gray-100">
-            {overview?.alerts?.by_type && (
-              <div className="space-y-2">
-                <p className="text-sm font-semibold text-green-main">Violation Breakdown:</p>
-                <div className="space-y-2">
-                  {Object.entries(overview.alerts.by_type).map(([type, count]) => {
-                    const iconMap = {
-                      no_hardhat: <FaHardHat className="h-3.5 w-3.5 mr-2" />,
-                      no_vest: <FaShieldAlt className="h-3.5 w-3.5 mr-2" />,
-                      no_goggles: <FaEye className="h-3.5 w-3.5 mr-2" />
-                    };
-                    
-                    return (
-                      <div key={type} className="flex justify-between items-center text-sm bg-surface-light rounded-md p-2">
-                        <div className="flex items-center">
-                          {iconMap[type] || <FaExclamationTriangle className="h-3.5 w-3.5 mr-2" />}
-                          <span>{type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}</span>
-                        </div>
-                        <span className="font-medium bg-surface px-2 py-0.5 rounded-full text-xs">{count}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+          <div className="mt-4">
+            <div className="flex items-center text-sm">
+              <span className="text-gray-600">Trend:</span>
+              <span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-medium ${
+                overview?.compliance?.trend > 0 
+                  ? 'bg-green-50 text-green-700' 
+                  : 'bg-red-50 text-red-700'
+              }`}>
+                {overview?.compliance?.trend > 0 ? '↑' : '↓'} {Math.abs(overview?.compliance?.trend || 0)}%
+              </span>
+            </div>
           </div>
         </section>
       </div>
       
-      {/* Chart and recent alerts */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Chart */}
-        <section className="bg-white rounded-2xl shadow-2xl p-8 flex flex-col gap-4 border border-green-main lg:col-span-2" aria-label="Alert Trends Chart">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-medium text-gray-900">Alert Trends</h2>
-            <div className="flex items-center text-xs text-gray-500">
-              <div className="w-3 h-3 rounded-full bg-green-main text-white mr-1"></div>
-              <span className="mr-3">Total</span>
-              {Array.from(new Set(timeline?.timeline.flatMap(item => Object.keys(item.by_type || {})) || [])).slice(0, 2).map((type, index) => (
-                <div key={type} className="flex items-center ml-2">
-                  <div className="w-3 h-3 rounded-full mr-1" style={{
-                    backgroundColor: [`rgb(235, 87, 87)`, `rgb(106, 171, 218)`][index] || `hsl(${(index * 137) % 360}, 70%, 50%)`
-                  }}></div>
-                  <span>{type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-          {chartData ? (
-            <div className="h-80">
-              <Line data={chartData} options={{
-                ...chartOptions,
-                plugins: {
-                  legend: {
-                    display: true,
-                    position: 'top',
-                    align: 'end',
-                    labels: {
-                      color: '#2B3933',
-                      font: { size: 16, weight: 'bold' },
-                      usePointStyle: true,
-                      boxWidth: 16,
-                      padding: 20,
-                    },
-                  },
-                },
-                scales: {
-                  x: {
-                    grid: { display: false },
-                    ticks: { color: '#2B3933', font: { weight: 'bold', size: 14 } },
-                  },
-                  y: {
-                    grid: { color: '#F4F5F2', lineWidth: 2 },
-                    ticks: { color: '#2B3933', font: { weight: 'bold', size: 14 } },
-                  },
-                },
-                elements: {
-                  line: {
-                    borderWidth: 4,
-                    tension: 0.5,
-                  },
-                  point: {
-                    radius: 7,
-                    backgroundColor: '#65704F',
-                    borderColor: '#fff',
-                    borderWidth: 3,
-                    hoverRadius: 10,
-                  },
-                },
-                animation: { duration: 1000, easing: 'easeOutQuart' },
-                backgroundColor: '#fff',
-              }} />
-            </div>
+      {/* Chart section */}
+      <section className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
+        <div className="mb-6">
+          <h2 className="text-lg font-semibold text-gray-900">Alert Trends</h2>
+          <p className="text-sm text-gray-600">Violation trends over time</p>
+        </div>
+        <div className="h-[400px] md:h-[420px] w-full flex items-center justify-center">
+          {chartData && chartData.labels.filter(Boolean).length > 0 && chartData.datasets.some(ds => ds.data.some(val => val > 0)) ? (
+            <Line data={chartData} options={chartOptions} />
           ) : (
-            <div className="flex items-center justify-center h-64 bg-surface-light rounded-lg">
-              <p className="text-gray-500">No trend data available</p>
-            </div>
+            <div className="text-center text-gray-400 text-lg font-medium">No alert trend data available</div>
           )}
-        </section>
-        
-        {/* Recent alerts */}
-        <section className="bg-white rounded-2xl shadow-xl hover:shadow-2xl transition-shadow duration-300 p-6 flex flex-col gap-3 border border-green-main" aria-label="Dashboard Card">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-medium text-gray-900">Recent Alerts</h2>
-            <Link to="/alerts" className="text-xs text-green-main hover:underline transition-colors">View all</Link>
+        </div>
+      </section>
+
+      {/* Recent alerts section */}
+      <section className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Recent Alerts</h2>
+            <p className="text-sm text-gray-600">Latest safety violations</p>
           </div>
-          <div className="space-y-3">
-            {alerts.length > 0 ? (
-              alerts.map(alert => (
-                <Link
-                  key={alert.id}
-                  to={`/alerts/${alert.id}`}
-                  className="block transition-all hover:translate-x-1 duration-200"
-                >
-                  <div className="border border-gray-200 rounded-lg p-3 hover:bg-surface-light transition-colors group">
-                    <div className="flex justify-between items-center">
-                      <div className="flex items-center space-x-3">
-                        <div className="bg-surface-light p-2 rounded-full group-hover:bg-green-main text-white transition-colors">
-                          {alert.violation_type === 'no_hardhat' ? (
-                            <FaHardHat className="h-4 w-4 text-danger-600" />
-                          ) : alert.violation_type === 'no_vest' ? (
-                            <FaShieldAlt className="h-4 w-4 text-danger-600" />
-                          ) : alert.violation_type === 'no_goggles' ? (
-                            <FaEye className="h-4 w-4 text-danger-600" />
-                          ) : (
-                            <FaExclamationCircle className="h-4 w-4 text-danger-600" />
-                          )}
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium text-gray-900 group-hover:text-green-main transition-colors">
-                            {alert.camera_name || 'Unknown camera'}
-                          </p>
-                          <div className="flex items-center text-xs text-gray-500">
-                            <FaClock className="h-3 w-3 mr-1" />
-                            {new Date(alert.created_at || alert.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                          </div>
-                        </div>
-                      </div>
-                      <span className="px-2 py-1 text-xs font-medium rounded-full bg-danger-100 text-danger-800 group-hover:bg-danger-200 transition-colors">
-                        {alert.violation_type ? alert.violation_type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') : 'Unknown'}
-                      </span>
-                    </div>
-                  </div>
-                </Link>
-              ))
-            ) : (
-              <div className="text-center py-8 bg-surface-light rounded-lg">
-                <FaTimes className="h-8 w-8 text-gray-400 mx-auto mb-2" />
-                <p className="text-gray-500">No recent alerts</p>
+          <Link 
+            to="/alerts" 
+            className="text-sm font-medium text-primary-600 hover:text-primary-700 flex items-center gap-1"
+          >
+            View all
+            <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+            </svg>
+          </Link>
+        </div>
+        <div className="space-y-4">
+          {alerts.map((alert) => (
+            <div 
+              key={alert.id} 
+              className="flex items-center justify-between p-4 rounded-lg border border-gray-200 hover:border-gray-300 transition-colors"
+            >
+              <div className="flex items-center gap-4">
+                <div className={`p-2 rounded-lg ${
+                  alert.severity === 'high' ? 'bg-red-50' :
+                  alert.severity === 'medium' ? 'bg-yellow-50' :
+                  'bg-blue-50'
+                }`}>
+                  <FaExclamationTriangle className={`h-5 w-5 ${
+                    alert.severity === 'high' ? 'text-red-600' :
+                    alert.severity === 'medium' ? 'text-yellow-600' :
+                    'text-blue-600'
+                  }`} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-medium text-gray-900">{alert.type}</h3>
+                  <p className="text-sm text-gray-600">{alert.location}</p>
+                </div>
               </div>
-            )}
-          </div>
-        </section>
-      </div>
+              <div className="flex items-center gap-4">
+                <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                  alert.severity === 'high' ? 'bg-red-50 text-red-700' :
+                  alert.severity === 'medium' ? 'bg-yellow-50 text-yellow-700' :
+                  'bg-blue-50 text-blue-700'
+                }`}>
+                  {alert.severity}
+                </span>
+                <span className="text-sm text-gray-500">
+                  {new Date(alert.timestamp).toLocaleTimeString()}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
       
       {/* Camera previews */}
       <section className="bg-white rounded-2xl shadow-xl hover:shadow-2xl transition-shadow duration-300 p-6 flex flex-col gap-3 border border-green-main" aria-label="Dashboard Card">

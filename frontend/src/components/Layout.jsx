@@ -51,11 +51,11 @@ const Layout = () => {
   };
   
   return (
-    <div className="flex h-screen bg-white overflow-hidden">
+    <div className="flex h-screen bg-gray-50 overflow-hidden">
       {/* Mobile sidebar backdrop */}
       {sidebarOpen && (
         <div 
-          className="fixed inset-0 z-20 bg-black bg-opacity-40 backdrop-blur-sm transition-opacity lg:hidden"
+          className="fixed inset-0 z-20 bg-black/40 backdrop-blur-sm transition-opacity lg:hidden"
           aria-label="Sidebar overlay"
           tabIndex={0}
           role="button"
@@ -65,38 +65,42 @@ const Layout = () => {
       
       {/* Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-30 transition-all duration-300 ease-in-out shadow-2xl border-r border-green-main
-          ${sidebarOpen ? 'w-56 bg-green-main' : 'w-16 bg-green-main'}
-          lg:translate-x-0 lg:static lg:inset-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
+        className={`fixed inset-y-0 left-0 z-30 transition-all duration-300 ease-in-out
+          ${sidebarOpen ? 'w-64' : 'w-20'} 
+          bg-white border-r border-gray-200
+          lg:translate-x-0 lg:static lg:inset-0 
+          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
         aria-label="Sidebar"
       >
         <div className="flex h-full flex-col">
           {/* Sidebar header */}
-          <div className="flex h-16 items-center justify-between px-2 border-b border-primary-800">
-  <div className="flex items-center space-x-2">
-    <FaShieldAlt className="h-7 w-7 text-white" />
-    {sidebarOpen && <span className="text-lg font-extrabold text-white tracking-wide transition-all duration-200">SIFT</span>}
-  </div>
-  <button 
-    onClick={toggleSidebar} 
-    className="text-white bg-green-main hover:bg-green-main/90 p-2 rounded-full transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-green-main"
-    aria-label="Toggle sidebar"
-  >
-    {sidebarOpen ? <FaTimes size={20} /> : <FaBars size={20} />}
-  </button>
-</div>
+          <div className="flex h-16 items-center justify-between px-4 border-b border-gray-200">
+            <div className="flex items-center space-x-3">
+              <FaShieldAlt className="h-8 w-8 text-primary-600" />
+              {sidebarOpen && (
+                <span className="text-xl font-bold text-gray-900 tracking-tight">SIFT</span>
+              )}
+            </div>
+            <button 
+              onClick={toggleSidebar} 
+              className="text-gray-500 hover:text-gray-700 p-2 rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500"
+              aria-label="Toggle sidebar"
+            >
+              {sidebarOpen ? <FaTimes size={20} /> : <FaBars size={20} />}
+            </button>
+          </div>
             
           {/* Sidebar navigation */}
           <nav className="flex-1 space-y-1 px-3 py-6" aria-label="Main navigation">
-            <div className="text-xs font-semibold text-secondary uppercase tracking-wider px-3 mb-3">Main</div>
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-3 mb-3">Main</div>
             <NavLink
               to="/dashboard"
               onClick={closeSidebarOnMobile}
               className={({ isActive }) =>
-                `flex items-center ${sidebarOpen ? 'px-4' : 'justify-center'} py-3 text-sm font-medium rounded-lg transition-colors gap-2 ${
+                `flex items-center ${sidebarOpen ? 'px-4' : 'justify-center'} py-3 text-sm font-medium rounded-lg transition-colors gap-3 ${
                   isActive
-                    ? 'bg-white text-green-main shadow-sm'
-                    : 'text-secondary hover:bg-green-main hover:text-white'
+                    ? 'bg-primary-50 text-primary-600'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                 }`
               }
               aria-current={({ isActive }) => (isActive ? 'page' : undefined)}
@@ -109,10 +113,10 @@ const Layout = () => {
               to="/cameras"
               onClick={closeSidebarOnMobile}
               className={({ isActive }) =>
-                `flex items-center ${sidebarOpen ? 'px-4' : 'justify-center'} py-3 text-sm font-medium rounded-lg transition-colors gap-2 ${
+                `flex items-center ${sidebarOpen ? 'px-4' : 'justify-center'} py-3 text-sm font-medium rounded-lg transition-colors gap-3 ${
                   isActive
-                    ? 'bg-white text-green-main shadow-sm'
-                    : 'text-secondary hover:bg-green-main hover:text-white'
+                    ? 'bg-primary-50 text-primary-600'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                 }`
               }
               aria-current={({ isActive }) => (isActive ? 'page' : undefined)}
@@ -125,10 +129,10 @@ const Layout = () => {
               to="/alerts"
               onClick={closeSidebarOnMobile}
               className={({ isActive }) =>
-                `flex items-center ${sidebarOpen ? 'px-4' : 'justify-center'} py-3 text-sm font-medium rounded-lg transition-colors gap-2 ${
+                `flex items-center ${sidebarOpen ? 'px-4' : 'justify-center'} py-3 text-sm font-medium rounded-lg transition-colors gap-3 ${
                   isActive
-                    ? 'bg-white text-green-main shadow-sm'
-                    : 'text-secondary hover:bg-green-main hover:text-white'
+                    ? 'bg-primary-50 text-primary-600'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                 }`
               }
               aria-current={({ isActive }) => (isActive ? 'page' : undefined)}
@@ -137,11 +141,12 @@ const Layout = () => {
               <FaBell className="h-5 w-5" />
               {sidebarOpen && 'Alerts'}
             </NavLink>
+            
             {sidebarOpen && (
-              <div className="text-xs font-semibold text-secondary uppercase tracking-wider px-3 mt-6 mb-3">Resources</div>
+              <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-3 mt-6 mb-3">Resources</div>
             )}
             <button
-              className={`flex items-center w-full ${sidebarOpen ? 'px-4' : 'justify-center'} py-3 text-sm font-medium rounded-lg text-secondary hover:bg-green-main hover:text-white transition-colors gap-2`}
+              className={`flex items-center w-full ${sidebarOpen ? 'px-4' : 'justify-center'} py-3 text-sm font-medium rounded-lg text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors gap-3`}
               aria-label="Safety Rules"
               title="Safety Rules"
             >
@@ -149,7 +154,7 @@ const Layout = () => {
               {sidebarOpen && 'Safety Rules'}
             </button>
             <button
-              className={`flex items-center w-full ${sidebarOpen ? 'px-4' : 'justify-center'} py-3 text-sm font-medium rounded-lg text-secondary hover:bg-green-main hover:text-white transition-colors gap-2`}
+              className={`flex items-center w-full ${sidebarOpen ? 'px-4' : 'justify-center'} py-3 text-sm font-medium rounded-lg text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors gap-3`}
               aria-label="Documentation"
               title="Documentation"
             >
@@ -157,69 +162,77 @@ const Layout = () => {
               {sidebarOpen && 'Documentation'}
             </button>
           </nav>
+
           {/* Sidebar footer with user profile */}
-          <div className="mt-auto p-4 border-t border-green-main bg-white shadow-inner">
-  <div className="flex items-center gap-3">
-    <div className="h-10 w-10 rounded-full bg-green-main flex items-center justify-center text-white font-extrabold text-lg shadow">A</div>
-    <div className="flex-1">
-      <p className="text-sm font-semibold text-green-main">Arnav Sareen</p>
-      <p className="text-xs text-gray-400">Admin</p>
-    </div>
-    <button className="ml-auto text-green-main hover:bg-green-main/10 p-2 rounded-full transition-all duration-200" aria-label="Account settings">
-      <FaCog className="h-5 w-5" />
-    </button>
-  </div>
-</div>
+          <div className="mt-auto p-4 border-t border-gray-100 bg-white overflow-hidden">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-full bg-primary-100 flex items-center justify-center text-primary-600 font-semibold text-lg border border-gray-200 flex-shrink-0">A</div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-900 truncate">Arnav Sareen</p>
+                <p className="text-xs text-gray-500 truncate">Admin</p>
+              </div>
+              <button 
+                className="text-gray-400 hover:text-primary-600 p-2 rounded-lg hover:bg-gray-100 transition-all duration-200 border border-transparent focus:border-primary-200 flex-shrink-0" 
+                aria-label="Account settings"
+              >
+                <FaCog className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
         </div>
       </aside>
       
       {/* Main content */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Header */}
-        <header className="bg-white shadow-lg z-10 border-b border-green-main">
+        <header className="bg-white border-b border-gray-200 shadow-sm">
           <div className="flex h-16 items-center justify-between px-4 md:px-6 gap-4">
             <div className="flex items-center gap-3">
               <button
                 onClick={toggleSidebar}
-                className="text-primary-600 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-600 rounded p-1 mr-2 lg:hidden"
+                className="text-gray-500 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500 rounded-lg p-2 mr-2 lg:hidden"
                 aria-label="Open sidebar"
               >
                 <FaBars size={20} />
               </button>
               {/* Breadcrumb navigation */}
-              <nav className="flex items-center text-sm text-gray-500" aria-label="Breadcrumb">
+              <nav className="flex items-center text-sm" aria-label="Breadcrumb">
                 <ol className="flex items-center space-x-2">
                   <li>
-                    <NavLink to="/dashboard" className="hover:text-primary-600 font-medium">Dashboard</NavLink>
+                    <NavLink to="/dashboard" className="text-gray-500 hover:text-gray-700 font-medium">Dashboard</NavLink>
                   </li>
                   {location.pathname !== '/dashboard' && (
                     <li className="flex items-center">
-                      <span className="mx-2">/</span>
-                      <span className="capitalize text-gray-700 font-semibold">{pageTitle}</span>
+                      <span className="mx-2 text-gray-400">/</span>
+                      <span className="text-gray-900 font-medium">{pageTitle}</span>
                     </li>
                   )}
                 </ol>
               </nav>
-              <div className="ml-4 text-xs text-primary-700 rounded-md px-2 py-1 bg-secondary hidden md:block">
-                
-              </div>
             </div>
             <div className="flex items-center gap-2">
-              <button className="rounded-full hover:bg-primary-100 p-2 text-primary-700 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-600" aria-label="Notifications">
+              <button 
+                className="rounded-lg hover:bg-gray-50 p-2 text-gray-500 hover:text-gray-700 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500" 
+                aria-label="Notifications"
+              >
                 <FaBell className="h-5 w-5" />
               </button>
-              <button className="rounded-full hover:bg-primary-100 p-2 text-primary-700 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-600" aria-label="Settings">
+              <button 
+                className="rounded-lg hover:bg-gray-50 p-2 text-gray-500 hover:text-gray-700 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500" 
+                aria-label="Settings"
+              >
                 <FaCog className="h-5 w-5" />
               </button>
-              <div className="hidden md:flex items-center ml-3 px-3 py-1 rounded-full bg-primary-600 text-white text-sm font-medium">
+              <div className="hidden md:flex items-center ml-3 px-3 py-1.5 rounded-lg bg-primary-50 text-primary-600 text-sm font-medium">
                 <FaShieldAlt className="mr-2 h-4 w-4" />
-                
+                Safety Mode
               </div>
             </div>
           </div>
         </header>
+        
         {/* Main content area */}
-        <main className="flex-1 overflow-auto p-4 md:p-6 bg-white">
+        <main className="flex-1 overflow-auto p-4 md:p-6 bg-gray-50">
           <div className="max-w-7xl mx-auto">
             <Outlet />
           </div>
