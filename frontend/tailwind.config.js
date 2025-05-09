@@ -7,18 +7,19 @@ module.exports = {
     extend: {
       colors: {
         primary: {
-          DEFAULT: '#65704F',
-          50: '#F4F5F2',
-          100: '#E9ECE4',
-          200: '#D3D9C9',
-          300: '#BDC6AF',
-          400: '#A7B294',
-          500: '#8C9D7A',
-          600: '#65704F', // Your primary color
-          700: '#525940',
-          800: '#3F4331',
-          900: '#2B2D22',
+          DEFAULT: '#4A725D', // Main green
+          50: '#EDF3F0',
+          100: '#D7E4DB',
+          200: '#B0C9BB',
+          300: '#8AAE9C',
+          400: '#6E9A85',
+          500: '#4A725D', // Main green
+          600: '#40624F',
+          700: '#34503F',
+          800: '#283D30',
+          900: '#1C2920',
         },
+        'green-main': '#4A725D',
         secondary: {
           DEFAULT: '#CEC5B0',
           50: '#FAF9F7',
