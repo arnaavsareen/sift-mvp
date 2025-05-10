@@ -1,3 +1,4 @@
+# backend/main.py
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -6,9 +7,12 @@ import logging
 from sqlalchemy.orm import Session
 
 from backend.database import get_db, engine
-from backend.models import Camera, Alert, Zone, Base
-from backend.routers import cameras, alerts, dashboard
+from backend.models import Base
+from backend.routers import cameras, alerts, dashboard, api  # Add api import
 from backend.config import SCREENSHOTS_DIR
+
+# Create database tables
+Base.metadata.create_all(bind=engine)
 
 # Configure logging
 logging.basicConfig(
@@ -16,9 +20,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-# Create database tables
-Base.metadata.create_all(bind=engine)
 
 # Create FastAPI app
 app = FastAPI(
@@ -44,7 +45,7 @@ app.mount("/screenshots", StaticFiles(directory=SCREENSHOTS_DIR), name="screensh
 app.include_router(cameras.router, prefix="/api/cameras", tags=["Cameras"])
 app.include_router(alerts.router, prefix="/api/alerts", tags=["Alerts"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
-
+app.include_router(api.router, prefix="/api", tags=["API"])  # Add the new API router
 
 @app.get("/api/health")
 def health_check():

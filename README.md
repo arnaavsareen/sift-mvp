@@ -10,12 +10,14 @@ SIFT is a real-time AI-powered compliance and task monitoring platform for SMB m
 - Compliance dashboard with metrics and trends
 - Camera management interface
 - Alert review and resolution workflow
+- Zone-based safety rules for different workplace areas
+- Performance monitoring and optimization
 
 ## Tech Stack
 
-- **Backend**: Python, FastAPI, OpenCV, YOLOv8
-- **Frontend**: React, TailwindCSS, Chart.js
-- **Database**: PostgreSQL
+- **Backend**: Python, FastAPI, OpenCV, YOLOv8, SQLAlchemy
+- **Frontend**: React, TailwindCSS, Chart.js, React Router
+- **Database**: SQLite (development), PostgreSQL (production)
 - **Deployment**: Docker, Docker Compose
 
 ## Quick Start
@@ -122,6 +124,17 @@ When adding a camera, use the appropriate URL format:
 - Local file: `/path/to/video.mp4`
 - Webcam: `0` (for default webcam)
 
+## Detection Capabilities
+
+SIFT can detect the following safety violations:
+
+- Missing hard hats in required areas
+- Missing safety vests in high-visibility zones
+- Missing masks, goggles, and gloves in chemical areas
+- Missing boots in construction zones
+
+The system uses zone-based rules that can be customized for different workplace areas, allowing for specific PPE requirements per zone.
+
 ## Adding Custom Detection Models
 
 To use a custom YOLOv8 model:
@@ -133,29 +146,103 @@ To use a custom YOLOv8 model:
 MODEL_PATH=data/models/your_custom_model.pt
 ```
 
-## Project Structure
+## Alert Management
+
+The platform provides a comprehensive alert management system:
+
+- Real-time alert generation with screenshots
+- Alert categorization by violation type
+- Resolution workflow for tracking compliance improvements
+- Historical alert data for trend analysis
+- Performance metrics for safety compliance
+
+## Current Project Structure
 
 ```
-sift/
-├── .env                    # Environment variables
-├── docker-compose.yml      # Docker composition
-├── requirements.txt        # Python dependencies
+sift-mvp/
+├── README.md                           # Project documentation
+├── docker-compose.yml                  # Docker composition
+├── requirements.txt                    # Python dependencies
 │
-├── backend/                # FastAPI application
-│   ├── main.py             # Entry point
-│   ├── config.py           # Configuration
-│   ├── models.py           # Database models
-│   ├── routers/            # API endpoints
-│   └── services/           # Business logic
+├── backend/                            # FastAPI application
+│   ├── __init__.py                     # Python package marker
+│   ├── app.db                          # SQLite database
+│   ├── config.py                       # Configuration settings
+│   ├── database.py                     # Database connection
+│   ├── main.py                         # Application entry point
+│   ├── models.py                       # SQLAlchemy models
+│   │
+│   ├── routers/                        # API endpoints
+│   │   ├── __init__.py                 # Package marker
+│   │   ├── alerts.py                   # Alert management routes
+│   │   ├── api.py                      # API utilities
+│   │   ├── cameras.py                  # Camera management routes
+│   │   └── dashboard.py                # Dashboard data routes
+│   │
+│   └── services/                       # Business logic
+│       ├── __init__.py                 # Package marker
+│       ├── alert.py                    # Alert management
+│       ├── config_service.py           # Configuration management
+│       ├── detection.py                # Object detection with YOLO
+│       ├── model_service.py            # ML model management
+│       ├── notification_service.py     # Alert notifications
+│       ├── performance_service.py      # Performance monitoring
+│       ├── video.py                    # Video stream processing
+│       └── zone_service.py             # Safety zone management
 │
-├── frontend/               # React application
-│   ├── public/             # Static assets
-│   └── src/                # React components
+├── data/                               # Data storage
+│   └── screenshots/                    # Alert screenshots
 │
-├── data/                   # Data storage
-│   ├── models/             # ML models
-│   └── screenshots/        # Alert screenshots
+├── deployment/                         # Deployment files
+│   └── docker/                         # Dockerfiles
+│       ├── backend.Dockerfile          # Backend container
+│       └── frontend.Dockerfile         # Frontend container
 │
-└── deployment/             # Deployment files
-    └── docker/             # Dockerfiles
+└── frontend/                           # React application
+    ├── build/                          # Production build
+    ├── package.json                    # NPM dependencies
+    ├── postcss.config.js               # PostCSS configuration
+    ├── public/                         # Static assets
+    ├── src/                            # Source code
+    │   ├── App.jsx                     # Main application component
+    │   ├── api/                        # API clients
+    │   │   └── api.js                  # API service
+    │   ├── components/                 # React components
+    │   │   ├── AlertsDetail.jsx        # Alert detail view
+    │   │   ├── AlertsList.jsx          # Alerts list view
+    │   │   ├── CamerasDetail.jsx       # Camera detail view
+    │   │   ├── CamerasList.jsx         # Cameras list view
+    │   │   ├── Dashboard.jsx           # Main dashboard view
+    │   │   ├── Layout.jsx              # Application layout
+    │   │   └── NotFound.jsx            # 404 page
+    │   ├── index.css                   # Global styles
+    │   ├── index.js                    # Application entry point
+    │   └── reportWebVitals.js          # Performance reporting
+    └── tailwind.config.js              # Tailwind CSS configuration
 ```
+
+## Key Components and Functionality
+
+### Backend Services
+
+- **Detection Service**: Uses YOLOv8 to detect people and PPE items in video frames, analyzes for safety violations
+- **Video Service**: Handles camera streams, frame processing, and maintains processing threads
+- **Alert Service**: Generates and manages safety violation alerts
+- **Zone Service**: Manages safety zones and their associated rules
+- **Notification Service**: Sends alerts through configured channels
+- **Performance Service**: Monitors system performance metrics
+
+### Frontend Components
+
+- **Dashboard**: Real-time overview with key metrics, recent alerts, and compliance trends
+- **Camera Management**: Interface for adding, configuring, and monitoring cameras
+- **Alert Management**: Review and resolution of safety violations
+- **Zone Configuration**: Define safety zones within camera views
+
+### API Endpoints
+
+- `/api/cameras`: Camera CRUD operations and status monitoring
+- `/api/alerts`: Alert generation, retrieval, and resolution
+- `/api/dashboard`: Analytics and metrics for the dashboard UI
+
+The application uses FastAPI's dependency injection for database access and React's component architecture for a responsive UI. All components communicate through RESTful API endpoints.

@@ -11,3 +11,16 @@ psycopg2-binary==2.9.6
 python-dotenv==1.0.0
 numpy==1.24.3
 Pillow==9.5.0
+# For zone detection and polygon operations
+shapely==2.0.1
+
+# For enhanced notification capabilities
+twilio==7.16.0  # For SMS notifications
+requests==2.28.2  # For webhook and Slack notifications
+
+# For monitoring and performance tracking
+psutil==5.9.5
+
+# For additional model management features
+gdown==4.7.1  # For downloading models from Google Drive
+boto3==1.26.135  # Optional: For AWS S3 model storage
