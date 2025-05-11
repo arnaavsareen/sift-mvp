@@ -344,49 +344,27 @@ const CameraDetail = () => {
         {/* Recent alerts */}
         <div className="space-y-6">
           <div className="card p-4">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-lg font-medium text-gray-900">Recent Alerts</h2>
-              <Link 
-                to={`/alerts?camera=${camera.id}`}
-                className="text-sm text-primary-600 hover:text-primary-800"
-              >
-                View all
-              </Link>
-            </div>
-            
-            <div className="space-y-4">
+            <h2 className="text-lg font-medium text-gray-900 mb-4">Recent Alerts</h2>
+            <div className="space-y-2">
               {alerts.length > 0 ? (
-                alerts.map(alert => (
+                alerts.map((alert) => (
                   <Link
-                    key={alert.id}
                     to={`/alerts/${alert.id}`}
-                    className="block border border-gray-200 rounded-md p-3 hover:bg-gray-50"
+                    key={alert.id}
+                    className="block p-3 bg-white hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors"
                   >
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-start">
-                        <div className="flex-shrink-0">
-                          <div className="h-8 w-8 rounded-full bg-danger-100 flex items-center justify-center">
-                            <FaBell className="h-4 w-4 text-danger-600" />
-                          </div>
-                        </div>
-                        <div className="ml-3">
-                          <p className="font-medium text-gray-900">
-                            {alert.violation_type.replace('_', ' ')}
-                          </p>
-                          <p className="text-xs text-gray-500 mt-1">
-                            {new Date(alert.created_at).toLocaleString()}
-                          </p>
-                        </div>
+                    <div className="flex items-center">
+                      <div className="flex-shrink-0">
+                        <FaBell className="h-5 w-5 text-danger-500" />
                       </div>
-                      <span
-                        className={`px-2 py-1 text-xs font-medium rounded-full ${
-                          alert.resolved
-                            ? 'bg-success-100 text-success-800'
-                            : 'bg-danger-100 text-danger-800'
-                        }`}
-                      >
-                        {alert.resolved ? 'Resolved' : 'Active'}
-                      </span>
+                      <div className="ml-3 flex-1">
+                        <p className="text-sm text-gray-900">
+                          {alert.violation_type.replace(/_/g, " ")}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {new Date(alert.created_at).toLocaleString()}
+                        </p>
+                      </div>
                     </div>
                     {alert.screenshot_path && (
                       <div className="mt-2">
@@ -404,17 +382,6 @@ const CameraDetail = () => {
                   <p className="text-gray-500">No alerts found for this camera</p>
                 </div>
               )}
-            </div>
-          </div>
-          
-          {/* Camera zones (placeholder for future feature) */}
-          <div className="card p-4">
-            <h2 className="text-lg font-medium text-gray-900 mb-4">Monitoring Zones</h2>
-            <div className="text-center py-6">
-              <p className="text-gray-500">
-                No zones configured. 
-                Monitoring zones feature will be available in the next version.
-              </p>
             </div>
           </div>
         </div>

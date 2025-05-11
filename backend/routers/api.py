@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import io
 import cv2
 import numpy as np
+import base64
 
 from backend.database import get_db
 from backend.models import Camera, Alert, Zone
@@ -929,7 +930,6 @@ def get_latest_frame(
     width: Optional[int] = Query(None, description="Resize width"),
     height: Optional[int] = Query(None, description="Resize height"),
     quality: int = Query(90, description="JPEG quality (1-100)"),
-    draw_zones: bool = Query(False, description="Draw detection zones on frame"),
     db: Session = Depends(get_db)
 ):
     """
@@ -960,11 +960,6 @@ def get_latest_frame(
                 detail="No frame available"
             )
         
-        # Draw zones if requested
-        if draw_zones:
-            zone_service = get_zone_service(db)
-            frame = zone_service.draw_zones(frame, camera_id)
-        
         # Resize if requested
         if width and height:
             frame = cv2.resize(frame, (width, height))
@@ -972,48 +967,31 @@ def get_latest_frame(
         # Convert to requested format
         if format.lower() == "jpeg":
             # Encode as JPEG
-            _, img_encoded = cv2.imencode(
-                ".jpg", 
-                frame, 
-                [cv2.IMWRITE_JPEG_QUALITY, quality]
-            )
-            return StreamingResponse(
-                io.BytesIO(img_encoded.tobytes()),
-                media_type="image/jpeg"
-            )
-            
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+            io_buf = io.BytesIO(buffer)
+            return StreamingResponse(io_buf, media_type="image/jpeg")
         elif format.lower() == "png":
             # Encode as PNG
-            _, img_encoded = cv2.imencode(".png", frame)
-            return StreamingResponse(
-                io.BytesIO(img_encoded.tobytes()),
-                media_type="image/png"
-            )
-            
+            ret, buffer = cv2.imencode('.png', frame)
+            io_buf = io.BytesIO(buffer)
+            return StreamingResponse(io_buf, media_type="image/png")
         elif format.lower() == "base64":
             # Encode as base64
-            import base64
-            _, img_encoded = cv2.imencode(
-                ".jpg", 
-                frame, 
-                [cv2.IMWRITE_JPEG_QUALITY, quality]
-            )
-            base64_str = base64.b64encode(img_encoded).decode("utf-8")
-            return {"image": base64_str, "format": "jpeg"}
-        
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+            img_str = base64.b64encode(buffer).decode('utf-8')
+            return {"image": f"data:image/jpeg;base64,{img_str}"}
         else:
             raise HTTPException(
                 status_code=400,
                 detail=f"Unsupported format: {format}"
             )
-            
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting latest frame for camera {camera_id}: {str(e)}")
+        logger.error(f"Error getting latest frame: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get latest frame for camera {camera_id}"
+            detail="Failed to get latest frame"
         )
 
 
@@ -1307,7 +1285,6 @@ async def test_detection(
         _, img_encoded = cv2.imencode(".jpg", annotated)
         
         # Convert to base64
-        import base64
         img_base64 = base64.b64encode(img_encoded).decode("utf-8")
         
         return {
