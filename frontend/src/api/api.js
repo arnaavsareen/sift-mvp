@@ -15,50 +15,100 @@ const api = axios.create({
 export const websocketApi = {
   // Create a camera stream connection
   createCameraStream: (cameraId, onFrame, onAlert, onError, onClose) => {
-    const ws = new WebSocket(`${WS_URL}/cameras/${cameraId}/stream`);
-    
-    ws.onopen = () => {
-      console.log(`WebSocket connection opened for camera ${cameraId}`);
-    };
-    
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        if (data.type === 'frame' && typeof onFrame === 'function') {
-          onFrame(data.frame, data.timestamp);
-        } else if (data.type === 'alert' && typeof onAlert === 'function') {
-          onAlert(data.data);
-        } else if (data.type === 'error') {
-          console.error(`WebSocket error from server: ${data.message}`);
-          if (typeof onError === 'function') {
-            onError(data.message);
+    const createWebSocket = () => {
+      // Create a new WebSocket connection
+      const ws = new WebSocket(`${WS_URL}/cameras/${cameraId}/stream`);
+      
+      // Connection status
+      let wasConnected = false;
+      let reconnectAttempts = 0;
+      const maxReconnectAttempts = 10;
+      const baseReconnectDelay = 1000; // Start with 1 second
+      
+      ws.onopen = () => {
+        console.log(`WebSocket connection opened for camera ${cameraId}`);
+        wasConnected = true;
+        reconnectAttempts = 0; // Reset reconnect counter on successful connection
+      };
+      
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          if (data.type === 'ping') {
+            // Just a ping to keep connection alive, no action needed
+            return;
+          } else if (data.type === 'frame' && typeof onFrame === 'function') {
+            onFrame(data.frame, data.timestamp);
+          } else if (data.type === 'alert' && typeof onAlert === 'function') {
+            onAlert(data.data);
+          } else if (data.type === 'error') {
+            console.error(`WebSocket error from server: ${data.message}`);
+            if (typeof onError === 'function') {
+              onError(data.message);
+            }
           }
+        } catch (err) {
+          console.error('Error processing WebSocket message:', err);
         }
-      } catch (err) {
-        console.error('Error processing WebSocket message:', err);
-      }
+      };
+      
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        if (typeof onError === 'function') {
+          onError('Connection error occurred. Will try to reconnect automatically.');
+        }
+      };
+      
+      ws.onclose = (event) => {
+        console.log(`WebSocket connection closed for camera ${cameraId}:`, event.code, event.reason);
+        
+        if (typeof onClose === 'function') {
+          onClose(event);
+        }
+        
+        // Attempt to reconnect with exponential backoff
+        if (reconnectAttempts < maxReconnectAttempts) {
+          reconnectAttempts++;
+          const reconnectDelay = Math.min(30000, baseReconnectDelay * Math.pow(1.5, reconnectAttempts - 1));
+          
+          console.log(`Attempting to reconnect WebSocket for camera ${cameraId} in ${reconnectDelay/1000} seconds (attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
+          
+          if (typeof onError === 'function') {
+            onError(`Connection closed. Reconnecting in ${Math.round(reconnectDelay/1000)} seconds (attempt ${reconnectAttempts}/${maxReconnectAttempts})...`);
+          }
+          
+          setTimeout(() => {
+            if (ws.closedManually !== true) {
+              const newConnection = createWebSocket();
+              // Replace the old socket reference with the new one
+              Object.assign(ws, newConnection);
+            }
+          }, reconnectDelay);
+        } else if (wasConnected) {
+          // Max reconnect attempts reached
+          if (typeof onError === 'function') {
+            onError(`Failed to reconnect after ${maxReconnectAttempts} attempts. Please try refreshing the page.`);
+          }
+          console.error(`WebSocket max reconnect attempts (${maxReconnectAttempts}) reached for camera ${cameraId}`);
+        }
+      };
+      
+      return ws;
     };
     
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      if (typeof onError === 'function') {
-        onError(error);
-      }
-    };
+    // Create the initial WebSocket connection
+    const ws = createWebSocket();
     
-    ws.onclose = (event) => {
-      console.log(`WebSocket connection closed for camera ${cameraId}:`, event.code, event.reason);
-      if (typeof onClose === 'function') {
-        onClose(event);
-      }
-    };
+    // Custom property to track manual close
+    ws.closedManually = false;
     
     // Return the WebSocket instance and a close function
     return {
       socket: ws,
       close: () => {
         if (ws && ws.readyState !== WebSocket.CLOSED) {
+          ws.closedManually = true; // Mark as manually closed to prevent auto-reconnect
           ws.close();
         }
       }

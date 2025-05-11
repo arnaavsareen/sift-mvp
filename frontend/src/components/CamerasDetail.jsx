@@ -105,6 +105,7 @@ const CameraDetail = () => {
         wsRef.current.close();
         wsRef.current = null;
       }
+      setWsError(null);
       return;
     }
     
@@ -123,6 +124,8 @@ const CameraDetail = () => {
     };
     
     const onAlert = (alertData) => {
+      console.log("Received alert via WebSocket:", alertData);
+      
       // When a new alert is received via WebSocket, update the alerts list
       setAlerts(prevAlerts => {
         // Check if alert already exists
@@ -136,35 +139,29 @@ const CameraDetail = () => {
     
     const onError = (error) => {
       console.error("WebSocket error:", error);
-      setWsError("Connection error. Trying to reconnect...");
+      setWsError(error.toString());
       
       // If WebSocket fails, fall back to regular polling
       if (frameRef.current) {
         const timestamp = new Date().getTime();
-        frameRef.current.src = `http://localhost:8000/api/dashboard/cameras/${id}/latest-frame?format=jpeg&t=${timestamp}`;
+        frameRef.current.src = `${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/dashboard/cameras/${id}/latest-frame?format=jpeg&t=${timestamp}`;
       }
     };
     
-    const onClose = () => {
-      setWsError("Connection closed. Will try to reconnect...");
-      
-      // Try to reconnect after a short delay
-      setTimeout(() => {
-        if (isProcessing && !wsRef.current) {
-          const newWs = websocketApi.createCameraStream(id, onFrame, onAlert, onError, onClose);
-          wsRef.current = newWs;
-        }
-      }, 3000);
+    const onClose = (event) => {
+      // Connection closed - this is handled by the WebSocket library's automatic reconnection logic
+      if (event.code !== 1000) { // Not a normal closure
+        console.log("WebSocket connection closed abnormally:", event.code, event.reason);
+      }
     };
     
+    console.log("Creating WebSocket connection for camera:", id);
     const ws = websocketApi.createCameraStream(id, onFrame, onAlert, onError, onClose);
     wsRef.current = ws;
     
-    // Clear error message after connection is established
-    setWsError(null);
-    
     return () => {
       if (wsRef.current) {
+        console.log("Cleaning up WebSocket connection");
         wsRef.current.close();
         wsRef.current = null;
       }
@@ -299,44 +296,107 @@ const CameraDetail = () => {
         <div className="lg:col-span-2 space-y-6">
           {/* Camera feed */}
           <div className="card p-4">
-            <h2 className="text-lg font-medium text-gray-900 mb-4">Live Feed</h2>
-            <div className="bg-gray-200 rounded-lg w-full aspect-video overflow-hidden flex items-center justify-center">
-              {isProcessing ? (
-                <img
-                  ref={frameRef}
-                  src={`${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/dashboard/cameras/${id}/latest-frame?format=jpeg&t=${new Date().getTime()}`}
-                  alt="Camera feed"
-                  className="w-full h-full object-contain"
-                  onError={(e) => {
-                    e.target.src = '';
-                    e.target.className = 'hidden';
-                    e.target.nextSibling.className = 'block text-center p-4';
-                  }}
-                />
-              ) : (
-                <div className="text-center p-4">
-                  <FaVideo className="mx-auto h-16 w-16 text-gray-400 mb-4" />
-                  <p className="text-gray-600">
-                    Camera is not currently monitoring. 
-                    Click "Start Monitoring" to begin processing the video feed.
-                  </p>
-                </div>
+            <h2 className="text-lg font-medium text-gray-900 mb-4 flex items-center justify-between">
+              <span>Live Feed</span>
+              {isProcessing && (
+                <span className="flex items-center">
+                  <span className="animate-pulse w-3 h-3 bg-green-500 rounded-full mr-2"></span>
+                  <span className="text-sm font-normal text-green-600">Live</span>
+                </span>
               )}
-              <div className="hidden text-center p-4">
-                <FaExclamationTriangle className="mx-auto h-12 w-12 text-warning-500 mb-4" />
-                <p className="text-gray-700">
-                  Unable to load camera feed. 
-                  The camera might be offline or the stream URL is invalid.
-                </p>
+            </h2>
+            <div className="bg-gray-100 rounded-lg w-full overflow-hidden flex items-center justify-center shadow-inner relative">
+              <div className="aspect-video w-full relative">
+                {isProcessing ? (
+                  <>
+                    <img
+                      ref={frameRef}
+                      src={`${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/dashboard/cameras/${id}/latest-frame?format=jpeg&t=${new Date().getTime()}`}
+                      alt="Camera feed"
+                      className="w-full h-full object-contain bg-black"
+                      onError={(e) => {
+                        e.target.src = '';
+                        e.target.className = 'hidden';
+                        document.getElementById('camera-error-message').classList.remove('hidden');
+                      }}
+                    />
+                    <div className="absolute top-0 left-0 p-3 flex flex-col space-y-1">
+                      <div className="flex items-center space-x-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded text-sm">
+                        <FaVideo className="h-4 w-4" />
+                        <span>Camera {camera.name}</span>
+                      </div>
+                      {camera.location && (
+                        <div className="bg-black bg-opacity-50 text-white px-2 py-1 rounded text-sm flex items-center space-x-2">
+                          <span>📍 {camera.location}</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="absolute bottom-3 right-3 bg-black bg-opacity-50 px-2 py-1 rounded text-xs text-white">
+                      {new Date().toLocaleTimeString()}
+                    </div>
+                  </>
+                ) : (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-800 text-white">
+                    <FaVideo className="h-16 w-16 text-gray-400 mb-4" />
+                    <p className="text-xl font-medium text-center mb-2">No Active Video Feed</p>
+                    <p className="text-gray-400 max-w-md text-center mb-6">
+                      Camera is not currently monitoring. 
+                      Click "Start Monitoring" to begin processing the video feed.
+                    </p>
+                    <button
+                      onClick={startCamera}
+                      className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 flex items-center space-x-2"
+                    >
+                      <FaPlay className="h-4 w-4" />
+                      <span>Start Monitoring</span>
+                    </button>
+                  </div>
+                )}
+                <div id="camera-error-message" className="hidden absolute inset-0 flex flex-col items-center justify-center bg-gray-800 text-white">
+                  <FaExclamationTriangle className="h-16 w-16 text-yellow-500 mb-4" />
+                  <p className="text-xl font-medium text-center mb-2">Connection Error</p>
+                  <p className="text-gray-400 max-w-md text-center mb-6">
+                    Unable to load camera feed. 
+                    The camera might be offline or the stream URL is invalid.
+                  </p>
+                  <div className="flex space-x-4">
+                    <button
+                      onClick={() => {
+                        if (frameRef.current) {
+                          frameRef.current.src = `${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/dashboard/cameras/${id}/latest-frame?format=jpeg&t=${new Date().getTime()}`;
+                          frameRef.current.classList.remove('hidden');
+                          document.getElementById('camera-error-message').classList.add('hidden');
+                        }
+                      }}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center space-x-2"
+                    >
+                      <span>Retry Connection</span>
+                    </button>
+                    <button
+                      onClick={stopCamera}
+                      className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 flex items-center space-x-2"
+                    >
+                      <FaStop className="h-4 w-4" />
+                      <span>Stop Monitoring</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
             
             {isProcessing && (
-              <div className="mt-4 text-sm text-gray-600">
-                <p>Processing active. Streaming via WebSocket connection.</p>
-                {wsError && (
-                  <p className="text-danger-600 mt-1">{wsError}</p>
-                )}
+              <div className="mt-4 text-sm flex items-center justify-between">
+                <div className="flex items-center">
+                  <div className={`w-3 h-3 mr-2 rounded-full ${wsError ? 'bg-danger-500' : 'bg-success-500'}`}></div>
+                  <p className={wsError ? 'text-danger-700' : 'text-success-700'}>
+                    {wsError 
+                      ? `Connection issue: ${wsError}` 
+                      : 'Connected via WebSocket'}
+                  </p>
+                </div>
+                <div className="text-gray-500 text-xs">
+                  Last updated: {new Date().toLocaleTimeString()}
+                </div>
               </div>
             )}
           </div>
@@ -404,44 +464,110 @@ const CameraDetail = () => {
         <div className="space-y-6">
           <div className="card p-4">
             <h2 className="text-lg font-medium text-gray-900 mb-4">Recent Alerts</h2>
-            <div className="space-y-2">
+            <div className="space-y-4">
               {alerts.length > 0 ? (
                 alerts.map((alert) => (
                   <Link
                     to={`/alerts/${alert.id}`}
                     key={alert.id}
-                    className="block p-3 bg-white hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors"
+                    className="block rounded-lg overflow-hidden shadow-sm border border-gray-200 hover:shadow-md transition-all duration-200"
                   >
-                    <div className="flex items-center">
-                      <div className="flex-shrink-0">
-                        <FaBell className="h-5 w-5 text-danger-500" />
-                      </div>
-                      <div className="ml-3 flex-1">
-                        <p className="text-sm text-gray-900">
-                          {alert.violation_type.replace(/_/g, " ")}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {new Date(alert.created_at).toLocaleString()}
+                    <div className="flex flex-col">
+                      {alert.screenshot_path ? (
+                        <div className="relative">
+                          <img
+                            src={`${process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:8000'}${alert.screenshot_path.startsWith('/') ? '' : '/screenshots/'}${alert.screenshot_path}`}
+                            alt="Alert screenshot"
+                            className="w-full h-40 object-cover"
+                            onError={(e) => {
+                              e.target.onerror = null;
+                              e.target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgdmlld0JveD0iMCAwIDIwMCAyMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjIwMCIgaGVpZ2h0PSIyMDAiIGZpbGw9IiNFNUU3RUIiLz48cGF0aCBkPSJNMTAwIDcwQzEwMCA4MS4wNDU3IDkxLjA0NTcgOTAgODAgOTBDNjguOTU0MyA5MCA2MCA4MS4wNDU3IDYwIDcwQzYwIDU4Ljk1NDMgNjguOTU0MyA1MCA4MCA1MEM5MS4wNDU3IDUwIDEwMCA1OC45NTQzIDEwMCA3MFoiIGZpbGw9IiNBMUExQUEiLz48cGF0aCBkPSJNMTQwIDEzMEMxNDAgMTUyLjA5MSAxMjIuMDkxIDE3MCAxMDAgMTcwQzc3LjkwODYgMTcwIDYwIDE1Mi4wOTEgNjAgMTMwQzYwIDEwNy45MDkgNzcuOTA4NiA5MCAxMDAgOTBDMTIyLjA5MSA5MCAxNDAgMTA3LjkwOSAxNDAgMTMwWiIgZmlsbD0iI0ExQTFBQSIvPjwvc3ZnPg==';
+                            }}
+                          />
+                          <div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-black/60 to-transparent text-white p-2">
+                            <span className="px-2 py-0.5 bg-red-600/90 text-white text-xs font-semibold rounded uppercase">
+                              {alert.violation_type.replace(/_/g, ' ')}
+                            </span>
+                          </div>
+                          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent text-white text-xs p-2">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                {new Date(alert.created_at).toLocaleString([], {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })}
+                              </div>
+                              <div className="px-2 py-0.5 bg-white/20 backdrop-blur-sm rounded-full">
+                                {Math.round(alert.confidence * 100)}% confidence
+                              </div>
+                            </div>
+                          </div>
+                          {alert.bbox && (
+                            <div className="absolute inset-0 pointer-events-none">
+                              <div className="w-full h-full border-2 border-yellow-400 border-dashed opacity-60 animate-pulse"></div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="bg-gray-100 h-32 flex items-center justify-center">
+                          <div className="text-center">
+                            <FaBell className="mx-auto h-8 w-8 text-gray-300 mb-2" />
+                            <p className="text-sm text-gray-500">No image available</p>
+                          </div>
+                        </div>
+                      )}
+                      <div className="p-3 bg-white">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center">
+                            <FaBell className="h-4 w-4 text-danger-500 mr-2" />
+                            <p className="text-sm font-medium text-gray-900">
+                              {alert.violation_type.replace(/_/g, " ")}
+                            </p>
+                          </div>
+                          <div className="flex items-center">
+                            <span className={`px-2 py-0.5 text-xs rounded-full ${alert.resolved ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                              {alert.resolved ? 'Resolved' : 'Active'}
+                            </span>
+                          </div>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">
+                          {(() => {
+                            const type = alert.violation_type.toLowerCase();
+                            if (type.includes('hardhat') && type.includes('vest')) {
+                              return 'Worker without hard hat and safety vest';
+                            } else if (type.includes('hardhat')) {
+                              return 'Worker without required hard hat';
+                            } else if (type.includes('vest')) {
+                              return 'Worker without required safety vest';
+                            } else {
+                              return 'Safety violation detected';
+                            }
+                          })()}
                         </p>
                       </div>
                     </div>
-                    {alert.screenshot_path && (
-                      <div className="mt-2">
-                        <img
-                          src={`${process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:8000'}${alert.screenshot_path}`}
-                          alt="Alert screenshot"
-                          className="rounded-md w-full h-20 object-cover"
-                        />
-                      </div>
-                    )}
                   </Link>
                 ))
               ) : (
-                <div className="text-center py-6">
+                <div className="text-center py-8 bg-gray-50 rounded-lg border border-gray-100">
+                  <FaBell className="mx-auto h-10 w-10 text-gray-300 mb-2" />
                   <p className="text-gray-500">No alerts found for this camera</p>
+                  <p className="text-xs text-gray-400 mt-1">Alerts will appear here when safety violations are detected</p>
                 </div>
               )}
             </div>
+            {alerts.length > 0 && (
+              <div className="mt-4 text-center">
+                <Link
+                  to={`/alerts?camera=${camera.id}`}
+                  className="text-sm text-primary-600 hover:text-primary-800"
+                >
+                  View all alerts for this camera
+                </Link>
+              </div>
+            )}
           </div>
         </div>
       </div>

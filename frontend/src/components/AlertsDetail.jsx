@@ -189,17 +189,63 @@ const AlertDetail = () => {
           
           {/* Screenshot */}
           <div className="card p-4">
-            <h2 className="text-lg font-medium text-gray-900 mb-4">Screenshot</h2>
+            <h2 className="text-lg font-medium text-gray-900 mb-4">Detection Imagery</h2>
             {alert.screenshot_path ? (
-              <div className="rounded-lg overflow-hidden">
-                <img
-                  src={`http://localhost:8000${alert.screenshot_path}`}
-                  alt="Alert screenshot"
-                  className="w-full object-contain max-h-96"
-                />
+              <div className="rounded-lg overflow-hidden border border-gray-200 shadow-md">
+                <div className="relative">
+                  <img
+                    src={`${process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:8000'}${alert.screenshot_path.startsWith('/') ? '' : '/screenshots/'}${alert.screenshot_path}`}
+                    alt="Alert detection"
+                    className="w-full object-contain max-h-[400px]"
+                    onError={(e) => {
+                      console.error(`Failed to load image: ${e.target.src}`);
+                      e.target.onerror = null;
+                      e.target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgdmlld0JveD0iMCAwIDIwMCAyMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjIwMCIgaGVpZ2h0PSIyMDAiIGZpbGw9IiNFNUU3RUIiLz48cGF0aCBkPSJNMTAwIDcwQzEwMCA4MS4wNDU3IDkxLjA0NTcgOTAgODAgOTBDNjguOTU0MyA5MCA2MCA4MS4wNDU3IDYwIDcwQzYwIDU4Ljk1NDMgNjguOTU0MyA1MCA4MCA1MEM5MS4wNDU3IDUwIDEwMCA1OC45NTQzIDEwMCA3MFoiIGZpbGw9IiNBMUExQUEiLz48cGF0aCBkPSJNMTQwIDEzMEMxNDAgMTUyLjA5MSAxMjIuMDkxIDE3MCAxMDAgMTcwQzc3LjkwODYgMTcwIDYwIDE1Mi4wOTEgNjAgMTMwQzYwIDEwNy45MDkgNzcuOTA4NiA5MCAxMDAgOTBDMTIyLjA5MSA5MCAxNDAgMTA3LjkwOSAxNDAgMTMwWiIgZmlsbD0iI0ExQTFBQSIvPjwvc3ZnPg==';
+                    }}
+                  />
+                  
+                  {/* Violation type annotation */}
+                  <div className="absolute top-0 left-0 bg-black bg-opacity-50 text-white text-sm px-3 py-1 m-2 rounded-md">
+                    {alert.violation_type.replace(/_/g, ' ')}
+                  </div>
+                  
+                  {/* Confidence score */}
+                  <div className="absolute top-0 right-0 bg-primary-500 bg-opacity-70 text-white text-sm px-3 py-1 m-2 rounded-md">
+                    {Math.round(alert.confidence * 100)}% confidence
+                  </div>
+
+                  {/* Bounding box if available */}
+                  {alert.bbox && (
+                    <svg 
+                      className="absolute top-0 left-0 w-full h-full pointer-events-none"
+                      viewBox="0 0 100 100" 
+                      preserveAspectRatio="none"
+                    >
+                      <rect
+                        x={alert.bbox[0]} 
+                        y={alert.bbox[1]} 
+                        width={alert.bbox[2] - alert.bbox[0]} 
+                        height={alert.bbox[3] - alert.bbox[1]}
+                        fill="none"
+                        stroke="red"
+                        strokeWidth="0.5"
+                        strokeDasharray="2,1"
+                        className="animate-pulse"
+                      />
+                    </svg>
+                  )}
+                </div>
+                <div className="p-3 bg-gray-50 border-t border-gray-200">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs text-gray-500">{new Date(alert.created_at).toLocaleString()}</div>
+                    <div className="text-xs font-medium text-gray-600">
+                      Camera: {camera ? camera.name : alert.camera_id}
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : (
-              <div className="bg-gray-200 rounded-lg flex items-center justify-center h-64">
+              <div className="bg-gray-100 rounded-lg flex items-center justify-center h-64">
                 <div className="text-center p-4">
                   <FaBell className="mx-auto h-12 w-12 text-gray-400 mb-4" />
                   <p className="text-gray-500">
@@ -208,6 +254,39 @@ const AlertDetail = () => {
                 </div>
               </div>
             )}
+          </div>
+          
+          {/* Violation details */}
+          <div className="card p-4">
+            <h2 className="text-lg font-medium text-gray-900 mb-4">Violation Details</h2>
+            <div className="grid grid-cols-1 gap-4">
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <h3 className="font-medium text-gray-700 mb-2">Description</h3>
+                <p className="text-gray-600">
+                  {(() => {
+                    const type = alert.violation_type.toLowerCase();
+                    if (type.includes('hardhat') && type.includes('vest')) {
+                      return 'Worker detected without required hard hat and safety vest. This is a serious safety violation that requires immediate attention.';
+                    } else if (type.includes('hardhat')) {
+                      return 'Worker detected without required hard hat. Head protection is mandatory in this area.';
+                    } else if (type.includes('vest')) {
+                      return 'Worker detected without required high-visibility vest. Proper visibility attire is mandatory in this area.';
+                    } else {
+                      return 'Safety violation detected. Please review the screenshot for details.';
+                    }
+                  })()}
+                </p>
+              </div>
+              
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <h3 className="font-medium text-gray-700 mb-2">Recommended Action</h3>
+                <p className="text-gray-600">
+                  {alert.resolved ? 
+                    'This violation has been addressed.' : 
+                    'Review the violation, dispatch safety personnel to the area, and ensure proper PPE compliance.'}
+                </p>
+              </div>
+            </div>
           </div>
           
           {/* Bounding box information (if available) */}

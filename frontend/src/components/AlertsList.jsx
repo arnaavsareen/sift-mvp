@@ -359,25 +359,38 @@ const AlertsList = () => {
                     <tr key={alert.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
-                          <div className="flex-shrink-0 h-10 w-10">
+                          <div className="flex-shrink-0 h-14 w-14 overflow-hidden mr-1">
                             {alert.screenshot_path ? (
-                              <img
-                                src={`http://localhost:8000${alert.screenshot_path}`}
-                                alt="Alert thumbnail"
-                                className="h-10 w-10 rounded-full object-cover"
-                              />
+                              <div className="relative h-14 w-14 rounded-md overflow-hidden border border-gray-200 shadow-sm">
+                                <img
+                                  src={`${process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:8000'}${alert.screenshot_path.startsWith('/') ? '' : '/screenshots/'}${alert.screenshot_path}`}
+                                  alt="Alert thumbnail"
+                                  className="h-14 w-14 object-cover"
+                                  onError={(e) => {
+                                    e.target.onerror = null;
+                                    e.target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgdmlld0JveD0iMCAwIDIwMCAyMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjIwMCIgaGVpZ2h0PSIyMDAiIGZpbGw9IiNFNUU3RUIiLz48cGF0aCBkPSJNMTAwIDcwQzEwMCA4MS4wNDU3IDkxLjA0NTcgOTAgODAgOTBDNjguOTU0MyA5MCA2MCA4MS4wNDU3IDYwIDcwQzYwIDU4Ljk1NDMgNjguOTU0MyA1MCA4MCA1MEM5MS4wNDU3IDUwIDEwMCA1OC45NTQzIDEwMCA3MFoiIGZpbGw9IiNBMUExQUEiLz48cGF0aCBkPSJNMTQwIDEzMEMxNDAgMTUyLjA5MSAxMjIuMDkxIDE3MCAxMDAgMTcwQzc3LjkwODYgMTcwIDYwIDE1Mi4wOTEgNjAgMTMwQzYwIDEwNy45MDkgNzcuOTA4NiA5MCAxMDAgOTBDMTIyLjA5MSA5MCAxNDAgMTA3LjkwOSAxNDAgMTMwWiIgZmlsbD0iI0ExQTFBQSIvPjwvc3ZnPg==';
+                                  }}
+                                />
+                                <div className="absolute bottom-0 left-0 right-0 bg-red-500 bg-opacity-60 text-white text-xs text-center py-0.5">
+                                  {Math.round(alert.confidence * 100)}%
+                                </div>
+                                {alert.bbox && (
+                                  <div className="absolute inset-0 border-2 border-red-400 border-dashed opacity-70"></div>
+                                )}
+                              </div>
                             ) : (
-                              <div className="h-10 w-10 rounded-full bg-danger-100 flex items-center justify-center">
+                              <div className="h-14 w-14 rounded-md bg-danger-100 flex items-center justify-center">
                                 <FaBell className="h-5 w-5 text-danger-600" />
                               </div>
                             )}
                           </div>
                           <div className="ml-4">
-                            <div className="text-sm font-medium text-gray-900">
-                              {alert.violation_type.replace('_', ' ')}
+                            <div className="text-sm font-medium text-gray-900 flex items-center">
+                              <span className="truncate max-w-[180px]">{alert.violation_type.replace(/_/g, ' ')}</span>
+                              <span className={`ml-2 inline-flex h-2 w-2 rounded-full ${alert.resolved ? 'bg-green-400' : 'bg-red-400'}`}></span>
                             </div>
                             <div className="text-xs text-gray-500">
-                              Confidence: {Math.round(alert.confidence * 100)}%
+                              {new Date(alert.created_at).toLocaleString()}
                             </div>
                           </div>
                         </div>

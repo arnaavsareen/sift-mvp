@@ -14,7 +14,9 @@ import {
   FaArrowUp,
   FaArrowDown,
   FaTimes,
-  FaExclamationCircle
+  FaExclamationCircle,
+  FaPlus,
+  FaCamera
 } from 'react-icons/fa';
 import { Line } from 'react-chartjs-2';
 import {
@@ -54,8 +56,12 @@ const Dashboard = () => {
       try {
         setLoading(true);
         
+        // Calculate hours based on time range
+        const hours = timeRange === '24h' ? 24 : timeRange === '7d' ? 168 : 720; // 24h, 7d or 30d
+        const intervalMinutes = timeRange === '24h' ? 60 : timeRange === '7d' ? 360 : 1440; // Adjust interval based on range
+        
         // Fetch overview data
-        const overviewData = await dashboardApi.getOverview();
+        const overviewData = await dashboardApi.getOverview({ hours });
         setOverview(overviewData);
         
         // Fetch cameras
@@ -66,8 +72,11 @@ const Dashboard = () => {
         const alertsData = await alertsApi.getAll({ limit: 5 });
         setAlerts(alertsData);
         
-        // Fetch timeline data
-        const timelineData = await dashboardApi.getTimeline();
+        // Fetch timeline data with appropriate interval
+        const timelineData = await dashboardApi.getTimeline({ 
+          hours, 
+          interval_minutes: intervalMinutes 
+        });
         setTimeline(timelineData);
         
         setLoading(false);
@@ -94,10 +103,17 @@ const Dashboard = () => {
 
     // Only use valid dates for labels
     const labels = timeline.timeline.map(item => {
-      const timeDate = new Date(item.time);
+      // Use timestamp if available, otherwise time
+      const timeString = item.timestamp || item.time;
+      const timeDate = new Date(timeString);
       return isNaN(timeDate.getTime())
         ? ''
-        : timeDate.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        : timeDate.toLocaleString([], { 
+            month: 'short', 
+            day: 'numeric', 
+            hour: timeRange === '24h' ? '2-digit' : undefined, 
+            minute: timeRange === '24h' ? '2-digit' : undefined 
+          });
     });
 
     // Get all violation types
@@ -110,47 +126,50 @@ const Dashboard = () => {
 
     // Modern color palette
     const palette = [
-      '#10b981', // emerald
-      '#6366f1', // indigo
-      '#f59e42', // orange
       '#ef4444', // red
-      '#3b82f6', // blue
-      '#a855f7', // purple
+      '#f59e42', // orange
       '#fbbf24', // yellow
+      '#10b981', // emerald
+      '#3b82f6', // blue
+      '#6366f1', // indigo
+      '#a855f7', // purple
     ];
 
     // Prepare datasets
     const datasets = Array.from(violationTypes).map((type, index) => {
       const color = palette[index % palette.length];
       return {
-        label: type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
+        label: type.replace(/_/g, ' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
         data: timeline.timeline.map(item => item.by_type?.[type] || 0),
         borderColor: color,
         backgroundColor: color + '22', // subtle fill
         pointBackgroundColor: color,
         pointBorderColor: '#fff',
-        pointRadius: 5,
-        pointHoverRadius: 8,
+        pointRadius: 3,
+        pointHoverRadius: 6,
         tension: 0.4,
-        borderWidth: 3,
-        fill: false,
+        borderWidth: 2,
+        fill: true,
       };
     });
 
-    // Add total line
-    datasets.push({
-      label: 'Total',
-      data: timeline.timeline.map(item => item.total),
-      borderColor: '#10b981',
-      backgroundColor: '#10b98122',
-      pointBackgroundColor: '#10b981',
-      pointBorderColor: '#fff',
-      pointRadius: 6,
-      pointHoverRadius: 10,
-      borderWidth: 4,
-      tension: 0.4,
-      fill: false,
-    });
+    // Add total line if there are multiple violation types
+    if (violationTypes.size > 1) {
+      datasets.push({
+        label: 'Total',
+        data: timeline.timeline.map(item => item.total),
+        borderColor: '#10b981',
+        backgroundColor: 'transparent',
+        pointBackgroundColor: '#10b981',
+        pointBorderColor: '#fff',
+        pointRadius: 4,
+        pointHoverRadius: 8,
+        borderWidth: 3,
+        tension: 0.4,
+        fill: false,
+        borderDash: violationTypes.size > 0 ? [5, 5] : undefined,
+      });
+    }
 
     return {
       labels,
@@ -235,6 +254,12 @@ const Dashboard = () => {
   const handleTimeRangeChange = (range) => {
     setTimeRange(range);
     // The useEffect will handle data refetching when timeRange changes
+  };
+  
+  // Helper to get camera name
+  const getCameraName = (cameraId) => {
+    const camera = cameras.find(c => c.id === cameraId);
+    return camera ? camera.name : `Camera ${cameraId}`;
   };
 
   if (loading) {
@@ -370,7 +395,7 @@ const Dashboard = () => {
               <p className="text-sm font-medium text-gray-600">Compliance</p>
               <div className="mt-2 flex items-baseline">
                 <p className="text-3xl font-bold text-gray-900">
-                  {overview?.compliance?.rate || 0}%
+                  {overview?.compliance_score ? Math.round(overview.compliance_score) : 0}%
                 </p>
                 <p className="ml-2 text-sm text-gray-500">rate</p>
               </div>
@@ -382,13 +407,30 @@ const Dashboard = () => {
           <div className="mt-4">
             <div className="flex items-center text-sm">
               <span className="text-gray-600">Trend:</span>
-              <span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-medium ${
-                overview?.compliance?.trend > 0 
-                  ? 'bg-green-50 text-green-700' 
-                  : 'bg-red-50 text-red-700'
-              }`}>
-                {overview?.compliance?.trend > 0 ? '↑' : '↓'} {Math.abs(overview?.compliance?.trend || 0)}%
-              </span>
+              {typeof overview?.compliance_score === 'number' ? (
+                <span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-medium ${
+                  (overview?.alerts?.total || 0) === 0 
+                    ? 'bg-gray-50 text-gray-700' 
+                    : overview?.compliance_score >= 90
+                    ? 'bg-green-50 text-green-700'
+                    : overview?.compliance_score >= 70
+                    ? 'bg-yellow-50 text-yellow-700'
+                    : 'bg-red-50 text-red-700'
+                }`}>
+                  {(overview?.alerts?.total || 0) === 0 
+                    ? 'No data'
+                    : overview?.compliance_score >= 90
+                    ? 'Excellent'
+                    : overview?.compliance_score >= 70
+                    ? 'Average'
+                    : 'Need attention'
+                  }
+                </span>
+              ) : (
+                <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-50 text-gray-700">
+                  Unknown
+                </span>
+              )}
             </div>
           </div>
         </section>
@@ -409,7 +451,100 @@ const Dashboard = () => {
         </div>
       </section>
 
-      {/* Recent alerts section */}
+      {/* Camera previews */}
+      <section className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Camera Monitoring</h2>
+            <p className="text-sm text-gray-600">Active surveillance cameras</p>
+          </div>
+          <Link 
+            to="/cameras" 
+            className="text-sm font-medium text-primary-600 hover:text-primary-700 flex items-center gap-1"
+          >
+            View all
+            <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+            </svg>
+          </Link>
+        </div>
+        
+        {cameras.length === 0 ? (
+          <div className="text-center py-12 border-2 border-dashed border-gray-200 rounded-lg">
+            <FaVideo className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-900 mb-2">No cameras configured</h3>
+            <p className="text-sm text-gray-500 mb-4 max-w-md mx-auto">
+              Add cameras to begin monitoring for safety violations
+            </p>
+            <Link 
+              to="/cameras/add" 
+              className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700"
+            >
+              <FaPlus className="mr-2 h-4 w-4" />
+              Add Camera
+            </Link>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {cameras.slice(0, 8).map((camera) => (
+              <Link
+                to={`/cameras/${camera.id}`}
+                key={camera.id}
+                className="block group"
+              >
+                <div className="bg-gray-800 rounded-lg overflow-hidden shadow-sm border border-gray-200 transition-all duration-200 group-hover:shadow-md">
+                  <div className="aspect-video relative bg-gray-900 overflow-hidden">
+                    {/* Camera preview image */}
+                    <img
+                      src={`${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/dashboard/cameras/${camera.id}/latest-frame?format=jpeg&t=${new Date().getTime()}`}
+                      alt={camera.name}
+                      className="w-full h-full object-contain"
+                      onError={(e) => {
+                        e.target.style.display = 'none';
+                      }}
+                    />
+                    
+                    {/* Camera details overlay */}
+                    <div className="absolute inset-0 flex flex-col justify-between p-4 bg-gradient-to-t from-black/70 to-transparent">
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <div className={`h-2 w-2 rounded-full ${camera.is_active ? 'bg-green-500' : 'bg-red-500'} animate-pulse`}></div>
+                          <span className="text-white text-xs font-medium">
+                            {camera.is_active ? 'Active' : 'Inactive'}
+                          </span>
+                        </div>
+                      </div>
+                      <div>
+                        <h3 className="text-white font-medium truncate">
+                          {camera.name}
+                        </h3>
+                        {camera.location && (
+                          <p className="text-gray-300 text-xs truncate">
+                            {camera.location}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+        
+        {cameras.length > 8 && (
+          <div className="mt-4 text-center">
+            <Link 
+              to="/cameras" 
+              className="text-sm font-medium text-primary-600 hover:text-primary-700"
+            >
+              View all {cameras.length} cameras
+            </Link>
+          </div>
+        )}
+      </section>
+      
+      {/* Recent alerts section with screenshots */}
       <section className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -426,109 +561,116 @@ const Dashboard = () => {
             </svg>
           </Link>
         </div>
-        <div className="space-y-4">
-          {alerts.map((alert) => (
-            <div 
-              key={alert.id} 
-              className="flex items-center justify-between p-4 rounded-lg border border-gray-200 hover:border-gray-300 transition-colors"
-            >
-              <div className="flex items-center gap-4">
-                <div className={`p-2 rounded-lg ${
-                  alert.severity === 'high' ? 'bg-red-50' :
-                  alert.severity === 'medium' ? 'bg-yellow-50' :
-                  'bg-blue-50'
-                }`}>
-                  <FaExclamationTriangle className={`h-5 w-5 ${
-                    alert.severity === 'high' ? 'text-red-600' :
-                    alert.severity === 'medium' ? 'text-yellow-600' :
-                    'text-blue-600'
-                  }`} />
-                </div>
-                <div>
-                  <h3 className="text-sm font-medium text-gray-900">{alert.type}</h3>
-                  <p className="text-sm text-gray-600">{alert.location}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-4">
-                <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                  alert.severity === 'high' ? 'bg-red-50 text-red-700' :
-                  alert.severity === 'medium' ? 'bg-yellow-50 text-yellow-700' :
-                  'bg-blue-50 text-blue-700'
-                }`}>
-                  {alert.severity}
-                </span>
-                <span className="text-sm text-gray-500">
-                  {new Date(alert.timestamp).toLocaleTimeString()}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-      
-      {/* Camera previews */}
-      <section className="bg-white rounded-2xl shadow-xl hover:shadow-2xl transition-shadow duration-300 p-6 flex flex-col gap-3 border border-green-main" aria-label="Dashboard Card">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-medium text-gray-900">Camera Previews</h2>
-          <Link to="/cameras" className="text-xs text-green-main hover:text-green-main flex items-center">
-            <span>Manage cameras</span>
-            <svg className="w-4 h-4 ml-1" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M10.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L12.586 11H5a1 1 0 110-2h7.586l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
-            </svg>
-          </Link>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {cameras.length > 0 ? (
-            cameras.slice(0, 3).map(camera => (
-              <Link
-                key={camera.id}
-                to={`/cameras/${camera.id}`}
-                className="block"
+        
+        {alerts.length === 0 ? (
+          <div className="text-center py-12 border-2 border-dashed border-gray-200 rounded-lg">
+            <FaBell className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-900 mb-2">No recent alerts</h3>
+            <p className="text-sm text-gray-500 max-w-md mx-auto">
+              Safety violation alerts will appear here when detected
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {alerts.map((alert) => (
+              <Link 
+                key={alert.id} 
+                to={`/alerts/${alert.id}`}
+                className="block rounded-lg overflow-hidden shadow-sm border border-gray-200 hover:shadow-md transition-all duration-200"
               >
-                <div className="border border-gray-200 rounded-md p-2 hover:bg-gray-50">
-                  <div className="aspect-video bg-gray-200 rounded-md flex items-center justify-center mb-2">
-                    <FaVideo className="h-8 w-8 text-gray-400" />
-                  </div>
-                  <div className="px-2">
-                    <p className="font-medium text-gray-900 truncate">
-                      {camera.name}
-                    </p>
-                    <p className="text-xs text-gray-500 truncate">
-                      {camera.location || 'No location set'}
-                    </p>
-                    <div className="flex justify-between items-center mt-2">
-                      <span
-                        className={`px-2 py-1 text-xs font-medium rounded-full ${
-                          camera.is_active
-                            ? 'bg-success-100 text-success-800'
-                            : 'bg-gray-100 text-gray-800'
-                        }`}
-                      >
-                        {camera.is_active ? 'Active' : 'Inactive'}
-                      </span>
+                <div className="flex flex-col h-full">
+                  {alert.screenshot_path ? (
+                    <div className="relative bg-gray-900">
+                      <img
+                        src={`${process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:8000'}${alert.screenshot_path.startsWith('/') ? '' : '/screenshots/'}${alert.screenshot_path}`}
+                        alt={`${alert.violation_type.replace(/_/g, ' ')} violation`}
+                        className="w-full h-48 object-cover"
+                        onError={(e) => {
+                          e.target.onerror = null;
+                          e.target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgdmlld0JveD0iMCAwIDIwMCAyMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjIwMCIgaGVpZ2h0PSIyMDAiIGZpbGw9IiNFNUU3RUIiLz48cGF0aCBkPSJNMTAwIDcwQzEwMCA4MS4wNDU3IDkxLjA0NTcgOTAgODAgOTBDNjguOTU0MyA5MCA2MCA4MS4wNDU3IDYwIDcwQzYwIDU4Ljk1NDMgNjguOTU0MyA1MCA4MCA1MEM5MS4wNDU3IDUwIDEwMCA1OC45NTQzIDEwMCA3MFoiIGZpbGw9IiNBMUExQUEiLz48cGF0aCBkPSJNMTQwIDEzMEMxNDAgMTUyLjA5MSAxMjIuMDkxIDE3MCAxMDAgMTcwQzc3LjkwODYgMTcwIDYwIDE1Mi4wOTEgNjAgMTMwQzYwIDEwNy45MDkgNzcuOTA4NiA5MCAxMDAgOTBDMTIyLjA5MSA5MCAxNDAgMTA3LjkwOSAxNDAgMTMwWiIgZmlsbD0iI0ExQTFBQSIvPjwvc3ZnPg==';
+                        }}
+                      />
+                      <div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-black/70 to-transparent text-white p-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <FaExclamationTriangle className="text-yellow-400" />
+                            <span className="font-medium text-sm">
+                              {alert.violation_type.replace(/_/g, ' ').toUpperCase()}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 bg-red-500 text-white text-xs px-2 py-1 rounded-full">
+                            <span>{Math.round(alert.confidence * 100)}%</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent text-white p-3">
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs">
+                            {new Date(alert.created_at).toLocaleString([], {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <FaCamera className="h-3 w-3" />
+                            <span className="text-xs">{getCameraName(alert.camera_id)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-gray-100 h-48 flex items-center justify-center">
+                      <div className="text-center">
+                        <FaBell className="h-10 w-10 text-gray-300 mx-auto mb-2" />
+                        <p className="text-sm text-gray-500">No image available</p>
+                      </div>
+                    </div>
+                  )}
+                  <div className="p-3 bg-white flex-grow flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center">
+                          <FaBell className="h-4 w-4 text-danger-500 mr-2 flex-shrink-0" />
+                          <p className="text-sm font-medium text-gray-900 truncate">
+                            {alert.violation_type.replace(/_/g, " ")}
+                          </p>
+                        </div>
+                        <div>
+                          <span className={`px-2 py-0.5 text-xs rounded-full ${alert.resolved ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                            {alert.resolved ? 'Resolved' : 'Active'}
+                          </span>
+                        </div>
+                      </div>
+                      <p className="text-xs text-gray-500">
+                        {(() => {
+                          const type = alert.violation_type.toLowerCase();
+                          if (type.includes('hardhat') && type.includes('vest')) {
+                            return 'Worker without hard hat and safety vest';
+                          } else if (type.includes('hardhat')) {
+                            return 'Worker without required hard hat';
+                          } else if (type.includes('vest')) {
+                            return 'Worker without required safety vest';
+                          } else {
+                            return 'Safety violation detected';
+                          }
+                        })()}
+                      </p>
+                    </div>
+                    <div className="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between">
+                      <p className="text-xs text-gray-500">
+                        {new Date(alert.created_at).toLocaleString()}
+                      </p>
+                      <p className="text-xs text-primary-600 font-medium flex items-center">
+                        <FaEye className="h-3 w-3 mr-1" />
+                        View Details
+                      </p>
                     </div>
                   </div>
                 </div>
               </Link>
-            ))
-          ) : (
-            <div className="col-span-3 text-center py-8">
-              <p className="text-gray-500 mb-4">No cameras configured</p>
-              <Link to="/cameras" className="btn-primary">
-                Add Camera
-              </Link>
-            </div>
-          )}
-        </div>
-        
-        {cameras.length > 3 && (
-          <div className="mt-4 text-center">
-            <Link
-              to="/cameras"
-              className="text-sm font-medium text-green-main hover:underline transition-colors"
-            >
-              View all cameras
-            </Link>
+            ))}
           </div>
         )}
       </section>

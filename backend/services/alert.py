@@ -133,15 +133,18 @@ class AlertService:
                 
                 # Broadcast alert via WebSocket if available
                 try:
-                    from backend.main import broadcast_alert
+                    from backend.main import get_alert_queue
                     
-                    # Schedule the WebSocket broadcast in the background
-                    asyncio.create_task(broadcast_alert(camera_id, alert_dict))
+                    # Add the alert to the queue for broadcasting from the main thread
+                    get_alert_queue().put((camera_id, alert_dict))
+                    logger.info(f"Added alert for camera {camera_id} to broadcast queue (violation: {violation_type}, confidence: {confidence:.2f})")
                     
                 except ImportError:
                     logger.debug("WebSocket broadcast not available")
                 except Exception as e:
-                    logger.error(f"Error broadcasting alert: {str(e)}")
+                    logger.error(f"Error queueing alert for broadcast: {str(e)}")
+                    import traceback
+                    logger.error(traceback.format_exc())
                 
             except Exception as e:
                 logger.error(f"Database error when creating alert: {str(e)}")
@@ -568,24 +571,16 @@ class AlertService:
             
             # Broadcast alert via WebSocket if available
             try:
-                from backend.main import broadcast_alert
+                from backend.main import get_alert_queue
                 
-                # Use asyncio to run the coroutine in the background
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # If we're already in an async context, create a task
-                    asyncio.create_task(broadcast_alert(camera_id, alert_dict))
-                else:
-                    # Otherwise, run the coroutine in a new thread
-                    import threading
-                    def run_async():
-                        asyncio.run(broadcast_alert(camera_id, alert_dict))
-                    threading.Thread(target=run_async).start()
+                # Add the alert to the queue for broadcasting from the main thread
+                get_alert_queue().put((camera_id, alert_dict))
+                logger.info(f"Added alert for camera {camera_id} to broadcast queue (violation: {violation_type}, confidence: {confidence:.2f})")
                 
             except ImportError:
                 logger.debug("WebSocket broadcast not available")
             except Exception as e:
-                logger.error(f"Error broadcasting alert: {str(e)}")
+                logger.error(f"Error queueing alert for broadcast: {str(e)}")
                 import traceback
                 logger.error(traceback.format_exc())
             
