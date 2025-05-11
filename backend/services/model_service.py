@@ -11,7 +11,7 @@ import time
 from urllib.request import urlretrieve
 from urllib.error import URLError
 
-# Conditionally import ultralytics
+# Import ultralytics
 try:
     from ultralytics import YOLO
     ULTRALYTICS_AVAILABLE = True
@@ -95,7 +95,7 @@ class ModelMetadata:
 
 class ModelService:
     """
-    Service for managing YOLOv8 models, including:
+    Service for managing YOLO models, including:
     - Model discovery and metadata tracking
     - Loading and validating models
     - Model selection based on task requirements
@@ -124,15 +124,6 @@ class ModelService:
         
         # Maximum number of models to keep in memory
         self.max_loaded_models = 3
-        
-        # Standard model URLs for auto-download
-        self.standard_models = {
-            "yolov8n": "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt",
-            "yolov8s": "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt",
-            "yolov8m": "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt",
-            "yolov8l": "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8l.pt",
-            "yolov8x": "https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x.pt",
-        }
         
         # Initialize
         self._load_metadata()
@@ -237,6 +228,41 @@ class ModelService:
                     self.models_metadata[model_id] = metadata
                     logger.info(f"Added new model: {model_name} (ID: {model_id})")
             
+            # Check specifically for yolo11m.pt
+            yolo_path = self.models_dir / "yolo11m.pt"
+            if yolo_path.exists() and str(yolo_path) not in existing_files:
+                model_id = self._generate_model_id(yolo_path)
+                model_name = "YOLO11-M"
+                
+                metadata = ModelMetadata(
+                    id=model_id,
+                    name=model_name,
+                    file_path=str(yolo_path),
+                    description="YOLO model for object detection",
+                    created_at=datetime.fromtimestamp(yolo_path.stat().st_mtime),
+                    updated_at=datetime.now()
+                )
+                
+                # Try to extract model info
+                if ULTRALYTICS_AVAILABLE:
+                    try:
+                        model_info = self._extract_model_info(yolo_path)
+                        if model_info:
+                            metadata.classes = model_info.get('classes', [])
+                            metadata.metrics = model_info.get('metrics', {})
+                            metadata.custom_metadata = model_info.get('extra', {})
+                    except Exception as e:
+                        logger.warning(f"Error extracting info for YOLO model: {str(e)}")
+                
+                # Add to metadata
+                self.models_metadata[model_id] = metadata
+                
+                # Set as default model for object detection
+                self.default_models['object_detection'] = model_id
+                
+                logger.info(f"Added YOLO model (ID: {model_id}) and set as default")
+                existing_files.add(str(yolo_path))
+            
             # Remove metadata for files that no longer exist
             removed_ids = []
             for model_id, metadata in self.models_metadata.items():
@@ -263,11 +289,19 @@ class ModelService:
             
             # If we have no default model for object detection, set one if available
             if 'object_detection' not in self.default_models or self.default_models['object_detection'] not in self.models_metadata:
+                # First, check for yolo11m.pt
                 for model_id, metadata in self.models_metadata.items():
-                    if metadata.task_type == 'object_detection':
+                    if "yolo11m" in metadata.file_path.lower():
                         self.default_models['object_detection'] = model_id
-                        logger.info(f"Set default object detection model to: {metadata.name} (ID: {model_id})")
+                        logger.info(f"Set default object detection model to YOLO (ID: {model_id})")
                         break
+                else:
+                    # If no YOLO model found, use any available object detection model
+                    for model_id, metadata in self.models_metadata.items():
+                        if metadata.task_type == 'object_detection':
+                            self.default_models['object_detection'] = model_id
+                            logger.info(f"Set default object detection model to: {metadata.name} (ID: {model_id})")
+                            break
             
             # Save metadata if changes were made
             if removed_ids or (len(existing_files) > 0 and len(self.models_metadata) > 0):
@@ -447,22 +481,16 @@ class ModelService:
             
             # If still no model ID, try to find any model for this task
             if model_id is None:
+                # First try to find YOLO11m model
                 for m_id, metadata in self.models_metadata.items():
-                    if metadata.task_type == task_type:
+                    if "yolo11m" in metadata.file_path.lower():
                         model_id = m_id
+                        logger.info(f"Selected YOLO11m model for {task_type}")
                         break
-            
-            # If still no model ID, look for the default YOLOv8 model
-            if model_id is None:
-                # Try to download a standard model
-                result = self.download_standard_model("yolov8s")
-                if result:
-                    # Rescan to find the newly downloaded model
-                    self._scan_models_directory()
-                    
-                    # Find the model we just downloaded
+                # If not found, use any model for the task
+                if model_id is None:
                     for m_id, metadata in self.models_metadata.items():
-                        if "yolov8s.pt" in metadata.file_path:
+                        if metadata.task_type == task_type:
                             model_id = m_id
                             break
             
@@ -481,7 +509,8 @@ class ModelService:
             metadata = self.models_metadata[model_id]
             
             try:
-                # Load model
+                # Load model using ultralytics YOLO
+                logger.info(f"Loading model from {metadata.file_path}")
                 model = YOLO(metadata.file_path)
                 
                 # Update model classes if not already set
@@ -501,6 +530,8 @@ class ModelService:
                 
             except Exception as e:
                 logger.error(f"Error loading model {metadata.name}: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
                 return False, None
     
     def _clean_loaded_models(self) -> None:
@@ -603,36 +634,6 @@ class ModelService:
             
             logger.info(f"Deleted model: {metadata.name} (ID: {model_id})")
             return True
-    
-    def download_standard_model(self, model_name: str) -> bool:
-        """
-        Download a standard YOLOv8 model.
-        
-        Args:
-            model_name: Model name (e.g., "yolov8n", "yolov8s", etc.)
-            
-        Returns:
-            True if successful
-        """
-        if model_name not in self.standard_models:
-            logger.warning(f"Unknown standard model: {model_name}")
-            return False
-        
-        url = self.standard_models[model_name]
-        output_path = self.models_dir / f"{model_name}.pt"
-        
-        try:
-            logger.info(f"Downloading {model_name} from {url}...")
-            urlretrieve(url, output_path)
-            logger.info(f"Downloaded {model_name} to {output_path}")
-            
-            # Rescan to pick up the new model
-            self._scan_models_directory()
-            
-            return True
-        except URLError as e:
-            logger.error(f"Error downloading {model_name}: {str(e)}")
-            return False
     
     def import_model(self, source_path: str, new_name: Optional[str] = None) -> Optional[str]:
         """

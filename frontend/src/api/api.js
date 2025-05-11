@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
+const WS_URL = process.env.REACT_APP_WS_URL || 'ws://localhost:8000/ws';
 
 // Create axios instance with default config
 const api = axios.create({
@@ -9,6 +10,61 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+// WebSocket connection utilities
+export const websocketApi = {
+  // Create a camera stream connection
+  createCameraStream: (cameraId, onFrame, onAlert, onError, onClose) => {
+    const ws = new WebSocket(`${WS_URL}/cameras/${cameraId}/stream`);
+    
+    ws.onopen = () => {
+      console.log(`WebSocket connection opened for camera ${cameraId}`);
+    };
+    
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'frame' && typeof onFrame === 'function') {
+          onFrame(data.frame, data.timestamp);
+        } else if (data.type === 'alert' && typeof onAlert === 'function') {
+          onAlert(data.data);
+        } else if (data.type === 'error') {
+          console.error(`WebSocket error from server: ${data.message}`);
+          if (typeof onError === 'function') {
+            onError(data.message);
+          }
+        }
+      } catch (err) {
+        console.error('Error processing WebSocket message:', err);
+      }
+    };
+    
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      if (typeof onError === 'function') {
+        onError(error);
+      }
+    };
+    
+    ws.onclose = (event) => {
+      console.log(`WebSocket connection closed for camera ${cameraId}:`, event.code, event.reason);
+      if (typeof onClose === 'function') {
+        onClose(event);
+      }
+    };
+    
+    // Return the WebSocket instance and a close function
+    return {
+      socket: ws,
+      close: () => {
+        if (ws && ws.readyState !== WebSocket.CLOSED) {
+          ws.close();
+        }
+      }
+    };
+  }
+};
 
 // API functions for cameras
 export const camerasApi = {

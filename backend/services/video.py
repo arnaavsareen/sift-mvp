@@ -22,14 +22,29 @@ class FrameBuffer:
     def __init__(self, maxsize=30):
         self.buffer = queue.Queue(maxsize=maxsize)
         self.last_frame = None
+        self.last_put_time = time.time()
+        self.skip_count = 0  # Track skipped frames for rate control
     
     def put(self, frame):
         """Add a frame to the buffer, dropping oldest frame if buffer is full."""
         if frame is None:
             return
+        
+        current_time = time.time()
+        time_since_last = current_time - self.last_put_time
             
         # Save this frame regardless of whether it goes into the buffer
         self.last_frame = frame.copy()
+        
+        # Only add every 2nd frame to buffer to prevent processing backlog
+        # This helps keep real-time detection more current with the video
+        self.skip_count += 1
+        if self.skip_count < 2:  # Skip this frame
+            return
+        
+        # Reset counter
+        self.skip_count = 0
+        self.last_put_time = current_time
         
         try:
             # Try to add to buffer, dropping oldest frame if needed
@@ -76,10 +91,10 @@ class VideoProcessor:
         camera_url: str,
         detection_service,
         alert_service,
-        frame_sample_rate: int = 10,
+        frame_sample_rate: int = 5,
         reconnect_delay: float = 3.0,
-        max_reconnect_attempts: int = 5,
-        buffer_size: int = 30
+        max_reconnect_attempts: int = 10,
+        buffer_size: int = 60
     ):
         self.camera_id = camera_id
         self.camera_url = camera_url
@@ -197,7 +212,13 @@ class VideoProcessor:
     
     def get_current_frame(self) -> Optional[np.ndarray]:
         """Get the latest annotated frame."""
-        return self.annotated_frame
+        if self.annotated_frame is not None:
+            return self.annotated_frame
+        elif self.current_frame is not None:
+            # If we have a current frame but no annotated frame yet,
+            # quickly create a basic annotated version
+            return self._add_frame_metadata(self.current_frame.copy())
+        return None
     
     def get_status(self) -> Dict[str, Any]:
         """Get current status and performance metrics."""
@@ -327,96 +348,109 @@ class VideoProcessor:
     def _process_frames(self) -> None:
         """
         Background thread to process frames from the buffer.
-        Handles detection, alert generation, and frame annotation.
+        Performs detection and handles safety violations.
         """
-        processed_since_fps = 0
-        last_fps_time = time.time()
-        alert_throttle_seconds = 5.0  # Minimum seconds between alerts for the same violation
+        frames_since_detection = 0
+        accumulated_detection_time = 0
+        detection_count = 0
+        avg_detection_time = 0
+        adaptive_sample_rate = self.frame_sample_rate  # Start with the configured sample rate
         
         try:
             while self.is_running:
-                # Get frame from buffer
+                start_time = time.time()
+                
+                # Get a frame from the buffer
                 frame = self.frame_buffer.get()
                 
-                # Skip if no frame
+                # Skip if no frame is available
                 if frame is None:
-                    time.sleep(0.01)  # Brief sleep to prevent CPU spinning
+                    time.sleep(0.01)  # Short sleep to prevent CPU spinning
                     continue
                 
-                # Store raw frame as current frame
+                # Store the raw frame
                 self.current_frame = frame.copy()
                 self.last_frame_time = datetime.now()
                 
-                # Process only every nth frame to reduce load
-                # But always process if we haven't processed any frames yet
-                if (self.processed_count > 0 and 
-                    self.processed_count % self.frame_sample_rate != 0):
-                    
-                    # Even if we skip detection, we update annotated frame
-                    if self.annotated_frame is not None:
-                        self.annotated_frame = self._add_frame_metadata(frame.copy())
-                    else:
-                        self.annotated_frame = frame.copy()
-                    
-                    time.sleep(0.001)  # Give other threads time
-                    continue
+                # Count processed frames
+                self.processed_count += 1
                 
-                # Run detection
-                try:
-                    start_time = time.time()
-                    
-                    # Detect objects in frame
-                    detections = self.detection_service.detect(frame)
-                    
-                    # Record detection time
-                    detection_time = time.time() - start_time
-                    self.detection_times.append(detection_time)
-                    if len(self.detection_times) > 50:
-                        self.detection_times.pop(0)
-                    
-                    # Filter for violations
-                    violations = [d for d in detections if d.get("violation", False)]
-                    
-                    # Process alerts with throttling
-                    current_time = time.time()
-                    if violations and (current_time - self.last_alert_time) > alert_throttle_seconds:
-                        alerts = self.alert_service.process_alerts(
-                            self.camera_id, 
-                            violations, 
-                            frame
-                        )
-                        if alerts:
-                            self.last_alert_time = current_time
-                            self.alert_count += len(alerts)
-                    
-                    # Annotate frame with detections
-                    self.annotated_frame = self._annotate_frame(frame, detections)
-                    
-                    # Update processed frame count
-                    self.processed_count += 1
-                    processed_since_fps += 1
-                    
-                    # Update processing FPS every second
-                    now = time.time()
-                    if now - last_fps_time >= 1.0:
-                        self.processing_fps = processed_since_fps / (now - last_fps_time)
-                        processed_since_fps = 0
-                        last_fps_time = now
-                    
-                except Exception as e:
-                    logger.error(f"Error processing frame from camera {self.camera_id}: {str(e)}")
-                    logger.error(traceback.format_exc())
-                    # If there's an error, still try to update the annotated frame
+                # Check if we should run detection on this frame
+                # Use adaptive sampling based on performance
+                should_detect = frames_since_detection >= adaptive_sample_rate
+                
+                if should_detect:
+                    # Run object detection
+                    detection_start = time.time()
+                    try:
+                        logger.debug(f"Running detection on frame for camera {self.camera_id}")
+                        detections = self.detection_service.detect(frame)
+                        detection_time = time.time() - detection_start
+                        
+                        # Log detection count
+                        logger.debug(f"Camera {self.camera_id}: Found {len(detections)} detections in {detection_time:.3f}s")
+                        
+                        # Update detection performance metrics
+                        self.detection_times.append(detection_time)
+                        if len(self.detection_times) > 50:
+                            self.detection_times.pop(0)
+                        
+                        # Keep track of accumulated detection time for adaptive sampling
+                        accumulated_detection_time += detection_time
+                        detection_count += 1
+                        if detection_count >= 10:  # Recalculate after 10 detections
+                            avg_detection_time = accumulated_detection_time / detection_count
+                            
+                            # Adjust sample rate based on performance
+                            # Target: Keep detection overhead under 40% of total processing time
+                            if avg_detection_time > 0.2:  # More than 200ms per detection
+                                adaptive_sample_rate = min(adaptive_sample_rate + 1, 15)  # Increase, max 15
+                                logger.debug(f"Camera {self.camera_id}: Increasing sample rate to {adaptive_sample_rate}")
+                            elif avg_detection_time < 0.05:  # Less than 50ms per detection
+                                adaptive_sample_rate = max(adaptive_sample_rate - 1, 1)  # Decrease, min 1
+                                logger.debug(f"Camera {self.camera_id}: Decreasing sample rate to {adaptive_sample_rate}")
+                            
+                            # Reset accumulators
+                            accumulated_detection_time = 0
+                            detection_count = 0
+                        
+                        # Record when we last ran detection
+                        self.last_detection_time = time.time()
+                        frames_since_detection = 0
+                        
+                        # If detections found, process for safety violations
+                        if detections:
+                            # Process each detection for potential violations
+                            self._process_detections(frame, detections)
+                            
+                            # Create annotated frame with all detections
+                            self.annotated_frame = self._annotate_frame(frame, detections)
+                        else:
+                            # Just add metadata overlay if no detections
+                            self.annotated_frame = self._add_frame_metadata(frame)
+                    except Exception as e:
+                        logger.error(f"Detection error for camera {self.camera_id}: {str(e)}")
+                        logger.error(traceback.format_exc())
+                        # Still create an annotated frame with error indication
+                        self.annotated_frame = self._add_frame_metadata(frame)
+                        frames_since_detection = 0  # Reset to force another attempt soon
+                else:
+                    # For frames where we skip detection, still annotate with basic info
                     self.annotated_frame = self._add_frame_metadata(frame.copy())
+                    frames_since_detection += 1
                 
-                # Brief sleep to prevent high CPU usage
-                time.sleep(0.001)
+                # Calculate processing frame rate
+                processing_time = time.time() - start_time
+                if processing_time > 0:
+                    self.processing_fps = 1.0 / processing_time
+                
+                # If processing is very fast, add a small delay to prevent CPU spinning
+                if processing_time < 0.01:
+                    time.sleep(0.01 - processing_time)
                 
         except Exception as e:
-            logger.error(f"Process thread error for camera {self.camera_id}: {str(e)}")
+            logger.error(f"Error in processing thread for camera {self.camera_id}: {str(e)}")
             logger.error(traceback.format_exc())
-        finally:
-            logger.info(f"Process thread for camera {self.camera_id} terminated")
     
     def _annotate_frame(self, frame, detections) -> np.ndarray:
         """
@@ -451,6 +485,9 @@ class VideoProcessor:
                 key=lambda d: 1 if d.get("violation", False) else 0
             )
             
+            # Log detection count for debugging
+            logger.info(f"Drawing {len(detections)} detections on frame (violations: {sum(1 for d in detections if d.get('violation', False))})")
+            
             for detection in detections_sorted:
                 bbox = detection["bbox"]
                 label = detection["class"]
@@ -473,13 +510,13 @@ class VideoProcessor:
                 else:
                     color = color_map.get(label.lower(), (255, 255, 255))
                 
-                # Draw bounding box
+                # Draw thicker bounding box (increased from 2 to 3 pixels)
                 cv2.rectangle(
                     annotated,
                     (x1, y1),
                     (x2, y2),
                     color,
-                    2
+                    3
                 )
                 
                 # Create label text
@@ -492,26 +529,40 @@ class VideoProcessor:
                 text_size, baseline = cv2.getTextSize(
                     label_text, 
                     cv2.FONT_HERSHEY_SIMPLEX, 
-                    0.5, 2
+                    0.6,  # Increased from 0.5 
+                    2
                 )
                 
-                # Draw label background (semi-transparent)
-                label_bg = np.zeros((text_size[1] + 10, text_size[0] + 10, 3), dtype=np.uint8)
-                label_bg[:, :] = (*color, 128)  # Use detection color with alpha
+                # Draw filled background for text (more visible)
+                cv2.rectangle(
+                    annotated,
+                    (x1, max(0, y1 - text_size[1] - 10)),
+                    (x1 + text_size[0] + 10, y1),
+                    color,
+                    -1  # Filled rectangle
+                )
                 
-                # Ensure label is within frame bounds
-                label_y = max(y1 - text_size[1] - 10, 0)
-                
-                # Draw label
+                # Draw label with increased size
                 cv2.putText(
                     annotated,
                     label_text,
-                    (x1, label_y + text_size[1] + 5),
+                    (x1 + 5, max(15, y1 - 5)),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
+                    0.6,  # Increased from 0.5
                     (255, 255, 255),
                     2
                 )
+                
+                # For violations, add extra highlight
+                if is_violation:
+                    # Draw a second, outer box for emphasis
+                    cv2.rectangle(
+                        annotated,
+                        (x1-5, y1-5),
+                        (x2+5, y2+5),
+                        (0, 0, 255),
+                        1
+                    )
             
             # Add frame metadata (timestamp, FPS, etc.)
             return self._add_frame_metadata(annotated)
@@ -585,6 +636,65 @@ class VideoProcessor:
             logger.error(f"Error adding frame metadata: {str(e)}")
             return frame  # Return unmodified frame if error occurs
 
+    def _process_detections(self, frame, detections) -> None:
+        """
+        Process detections to identify safety violations and generate alerts.
+        
+        Args:
+            frame: The original frame
+            detections: List of detection dictionaries
+        """
+        try:
+            # Filter for violations
+            violations = [d for d in detections if d.get("violation", False)]
+            
+            if not violations:
+                return
+                
+            # Process each violation to generate alerts
+            current_time = time.time()
+                
+            # Only generate alerts if enough time has passed since the last one
+            if (current_time - self.last_alert_time) < 5.0:  # 5 second minimum between alerts
+                return
+                
+            for violation in violations:
+                # Extract violation info
+                violation_type = violation.get("violation_type", "Unknown violation")
+                confidence = violation.get("confidence", 0.0)
+                bbox = violation.get("bbox")
+                
+                # Additional metadata to include with the alert
+                metadata = {
+                    "session_id": self.session_id,
+                    "frame_count": self.frame_count,
+                    "detection_class": violation.get("class", ""),
+                    "bbox": bbox
+                }
+                
+                # Create alert through alert service
+                alert = self.alert_service.create_alert(
+                    camera_id=self.camera_id,
+                    violation_type=violation_type,
+                    confidence=confidence,
+                    frame=frame,
+                    bbox=bbox,
+                    metadata=metadata
+                )
+                
+                if alert:
+                    self.last_alert_time = current_time
+                    self.alert_count += 1
+                    logger.info(f"Generated alert for camera {self.camera_id}: {violation_type} ({confidence:.2f})")
+                    
+                    # Only create one alert at a time to prevent alert flooding
+                    break
+                    
+        except Exception as e:
+            logger.error(f"Error processing detections: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+
 
 # Global storage for active processors
 _active_processors = {}
@@ -598,7 +708,7 @@ def start_processor(
     camera_url: str,
     detection_service,
     alert_service,
-    frame_sample_rate: int = 10
+    frame_sample_rate: int = 5
 ) -> bool:
     """
     Start a new video processor for camera.

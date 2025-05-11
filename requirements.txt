@@ -2,7 +2,9 @@ fastapi==0.95.0
 uvicorn==0.22.0
 pydantic==1.10.7
 opencv-python-headless==4.7.0.72
-ultralytics==8.0.120
+# Updated to use latest ultralytics
+ultralytics>=8.0.120
+torch>=2.0.0
 sqlalchemy==2.0.9
 python-multipart==0.0.6
 python-jose==3.3.0
@@ -23,4 +25,6 @@ psutil==5.9.5
 
 # For additional model management features
 gdown==4.7.1  # For downloading models from Google Drive
-boto3==1.26.135  # Optional: For AWS S3 model storage
+
+# WebSocket support for real-time streaming
+websockets==11.0.3

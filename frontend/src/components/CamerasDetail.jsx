@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { camerasApi, dashboardApi, alertsApi } from '../api/api';
+import { camerasApi, dashboardApi, alertsApi, websocketApi } from '../api/api';
 import { 
   FaVideo, 
   FaPlay, 
@@ -15,6 +15,8 @@ const CameraDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const frameRef = useRef(null);
+  const wsRef = useRef(null);
+  const canvasRef = useRef(null);
   
   const [camera, setCamera] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -22,6 +24,7 @@ const CameraDetail = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [wsError, setWsError] = useState(null);
   
   // Form state
   const [formData, setFormData] = useState({
@@ -94,25 +97,78 @@ const CameraDetail = () => {
     loadCamera();
   }, [id]);
   
-  // Frame refresh interval
+  // Frame refresh using WebSocket
   useEffect(() => {
-    if (!isProcessing) return;
+    if (!isProcessing) {
+      // Clean up any existing connection
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      return;
+    }
     
-    const refreshFrame = () => {
+    // Start WebSocket connection for streaming
+    const onFrame = (frameData, timestamp) => {
       if (frameRef.current) {
-        // Add timestamp to prevent caching
+        // Ensure we're correctly setting the image source with the base64 data
+        if (typeof frameData === 'string') {
+          frameRef.current.src = `data:image/jpeg;base64,${frameData}`;
+          frameRef.current.style.display = 'block';
+          
+          // Clear any error indicators
+          setWsError(null);
+        }
+      }
+    };
+    
+    const onAlert = (alertData) => {
+      // When a new alert is received via WebSocket, update the alerts list
+      setAlerts(prevAlerts => {
+        // Check if alert already exists
+        const exists = prevAlerts.some(a => a.id === alertData.id);
+        if (exists) return prevAlerts;
+        
+        // Add to beginning of list
+        return [alertData, ...prevAlerts].slice(0, 5);
+      });
+    };
+    
+    const onError = (error) => {
+      console.error("WebSocket error:", error);
+      setWsError("Connection error. Trying to reconnect...");
+      
+      // If WebSocket fails, fall back to regular polling
+      if (frameRef.current) {
         const timestamp = new Date().getTime();
         frameRef.current.src = `http://localhost:8000/api/dashboard/cameras/${id}/latest-frame?format=jpeg&t=${timestamp}`;
       }
     };
     
-    // Initial load
-    refreshFrame();
+    const onClose = () => {
+      setWsError("Connection closed. Will try to reconnect...");
+      
+      // Try to reconnect after a short delay
+      setTimeout(() => {
+        if (isProcessing && !wsRef.current) {
+          const newWs = websocketApi.createCameraStream(id, onFrame, onAlert, onError, onClose);
+          wsRef.current = newWs;
+        }
+      }, 3000);
+    };
     
-    // Set up interval
-    const interval = setInterval(refreshFrame, 1000); // Refresh every second
+    const ws = websocketApi.createCameraStream(id, onFrame, onAlert, onError, onClose);
+    wsRef.current = ws;
     
-    return () => clearInterval(interval);
+    // Clear error message after connection is established
+    setWsError(null);
+    
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
   }, [id, isProcessing]);
   
   // Handle form input changes
@@ -248,7 +304,7 @@ const CameraDetail = () => {
               {isProcessing ? (
                 <img
                   ref={frameRef}
-                  src={`http://localhost:8000/api/dashboard/cameras/${id}/latest-frame?format=jpeg`}
+                  src={`${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/dashboard/cameras/${id}/latest-frame?format=jpeg&t=${new Date().getTime()}`}
                   alt="Camera feed"
                   className="w-full h-full object-contain"
                   onError={(e) => {
@@ -277,7 +333,10 @@ const CameraDetail = () => {
             
             {isProcessing && (
               <div className="mt-4 text-sm text-gray-600">
-                <p>Processing active. Refreshing feed every second.</p>
+                <p>Processing active. Streaming via WebSocket connection.</p>
+                {wsError && (
+                  <p className="text-danger-600 mt-1">{wsError}</p>
+                )}
               </div>
             )}
           </div>
@@ -369,7 +428,7 @@ const CameraDetail = () => {
                     {alert.screenshot_path && (
                       <div className="mt-2">
                         <img
-                          src={`http://localhost:8000${alert.screenshot_path}`}
+                          src={`${process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:8000'}${alert.screenshot_path}`}
                           alt="Alert screenshot"
                           className="rounded-md w-full h-20 object-cover"
                         />

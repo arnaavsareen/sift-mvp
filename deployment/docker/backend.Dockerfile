@@ -12,7 +12,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy requirements first for better caching
 COPY requirements.txt .
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Install ultralytics separately to ensure we get the latest version
+RUN pip install --no-cache-dir ultralytics
 
 # Copy application code
 COPY . .
@@ -20,9 +25,8 @@ COPY . .
 # Create data directories
 RUN mkdir -p data/screenshots data/models
 
-# Download pre-trained YOLO model
-RUN pip install --no-cache-dir gdown && \
-    gdown https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt -O data/models/yolov8s.pt
+# Check if the model is already mounted in the container
+# If not, it will be handled at runtime through volume mounting
 
 # Expose port
 EXPOSE 8000

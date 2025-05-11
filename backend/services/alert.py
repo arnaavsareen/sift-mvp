@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+import asyncio
 
 from backend.models import Alert, Camera
 from backend.config import SCREENSHOTS_DIR
@@ -26,6 +27,8 @@ class AlertService:
         self.db = db
         self.alert_cache = {}  # Cache of recent alerts to prevent duplicates
         self.cache_ttl = 60  # Time to live for cached alerts (seconds)
+        self.min_alert_interval = 5.0  # Minimum time between alerts for the same camera
+        self.last_alert_times = {}  # Track last alert time per camera
         
         # Ensure screenshots directory exists
         os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
@@ -103,21 +106,7 @@ class AlertService:
                 confidence=confidence,
                 bbox=bbox,
                 screenshot_path=screenshot_path,
-                created_at=now,
-                location=camera.location if camera else None,
-                metadata={
-                    "detection_info": {
-                        "class": violation.get("class", "unknown"),
-                        "original_confidence": confidence
-                    },
-                    "camera_info": {
-                        "name": camera.name if camera else f"Camera {camera_id}",
-                        "location": camera.location if camera else None
-                    },
-                    "environment": {
-                        "timestamp": now.isoformat()
-                    }
-                }
+                created_at=now
             )
             
             # Save to database
@@ -134,11 +123,25 @@ class AlertService:
                     "confidence": alert.confidence,
                     "bbox": alert.bbox,
                     "screenshot_path": alert.screenshot_path,
-                    "created_at": alert.created_at.isoformat() if alert.created_at else None,
-                    "location": alert.location
+                    "created_at": alert.created_at.isoformat() if alert.created_at else None
                 }
                 
                 alerts.append(alert_dict)
+                
+                # Update last alert time
+                self.last_alert_times[camera_id] = time.time()
+                
+                # Broadcast alert via WebSocket if available
+                try:
+                    from backend.main import broadcast_alert
+                    
+                    # Schedule the WebSocket broadcast in the background
+                    asyncio.create_task(broadcast_alert(camera_id, alert_dict))
+                    
+                except ImportError:
+                    logger.debug("WebSocket broadcast not available")
+                except Exception as e:
+                    logger.error(f"Error broadcasting alert: {str(e)}")
                 
             except Exception as e:
                 logger.error(f"Database error when creating alert: {str(e)}")
@@ -176,8 +179,7 @@ class AlertService:
                 "screenshot_path": alert.screenshot_path,
                 "created_at": alert.created_at.isoformat() if alert.created_at else None,
                 "resolved": alert.resolved,
-                "resolved_at": alert.resolved_at.isoformat() if alert.resolved_at else None,
-                "location": alert.location
+                "resolved_at": alert.resolved_at.isoformat() if alert.resolved_at else None
             }
             for alert in alerts
         ]
@@ -468,6 +470,134 @@ class AlertService:
             return self.db.query(Camera).filter(Camera.id == camera_id).first()
         except Exception as e:
             logger.error(f"Error fetching camera {camera_id}: {str(e)}")
+            return None
+
+    def create_alert(
+        self, 
+        camera_id: int, 
+        violation_type: str, 
+        confidence: float,
+        frame,
+        bbox: Optional[List[float]] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Create a new safety violation alert with rate limiting.
+        
+        Args:
+            camera_id: ID of the camera that detected the violation
+            violation_type: Type of violation detected
+            confidence: Confidence score of the detection
+            frame: The frame image where the violation was detected
+            bbox: Bounding box coordinates [x1, y1, x2, y2]
+            metadata: Additional metadata about the violation
+            
+        Returns:
+            Alert data dictionary if created, None otherwise
+        """
+        try:
+            # Check if we should create a new alert (rate limiting)
+            current_time = time.time()
+            if camera_id in self.last_alert_times:
+                time_since_last = current_time - self.last_alert_times[camera_id]
+                if time_since_last < self.min_alert_interval:
+                    # Too soon for a new alert
+                    logger.debug(f"Rate limiting alert for camera {camera_id} ({time_since_last:.1f}s < {self.min_alert_interval:.1f}s)")
+                    return None
+            
+            # Get camera details
+            camera = self.db.query(Camera).filter(Camera.id == camera_id).first()
+            if not camera:
+                logger.error(f"Camera not found: {camera_id}")
+                return None
+                
+            # Generate a unique screenshot filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            unique_id = str(uuid.uuid4())[:8]
+            filename = f"violation_{camera_id}_{timestamp}_{unique_id}.jpg"
+            filepath = os.path.join(SCREENSHOTS_DIR, filename)
+            
+            # Save the screenshot
+            import cv2
+            if frame is not None:
+                # Make a copy to avoid modifying the original frame
+                alert_frame = frame.copy()
+                
+                # Draw bounding box on the frame if coordinates are provided
+                if bbox:
+                    x1, y1, x2, y2 = [int(coord) for coord in bbox]
+                    cv2.rectangle(alert_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                    
+                    # Add violation type and confidence as text
+                    text = f"{violation_type}: {confidence:.2f}"
+                    cv2.putText(alert_frame, text, (x1, y1 - 10), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                
+                # Save the frame as an image
+                cv2.imwrite(filepath, alert_frame)
+                logger.info(f"Saved violation screenshot to {filepath}")
+            else:
+                logger.warning("No frame provided for screenshot")
+                
+            # Create alert record
+            alert = Alert(
+                camera_id=camera_id,
+                violation_type=violation_type,
+                confidence=confidence,
+                screenshot_path=filename,
+                bbox=bbox
+            )
+            
+            self.db.add(alert)
+            self.db.commit()
+            self.db.refresh(alert)
+            
+            # Update last alert time
+            self.last_alert_times[camera_id] = current_time
+            
+            # Convert alert to dict for return and WebSocket broadcast
+            alert_dict = {
+                "id": alert.id,
+                "camera_id": alert.camera_id,
+                "violation_type": alert.violation_type,
+                "confidence": alert.confidence,
+                "timestamp": alert.created_at.isoformat(),
+                "screenshot_url": f"/screenshots/{alert.screenshot_path}",
+                "resolved": alert.resolved
+            }
+            
+            # Broadcast alert via WebSocket if available
+            try:
+                from backend.main import broadcast_alert
+                
+                # Use asyncio to run the coroutine in the background
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If we're already in an async context, create a task
+                    asyncio.create_task(broadcast_alert(camera_id, alert_dict))
+                else:
+                    # Otherwise, run the coroutine in a new thread
+                    import threading
+                    def run_async():
+                        asyncio.run(broadcast_alert(camera_id, alert_dict))
+                    threading.Thread(target=run_async).start()
+                
+            except ImportError:
+                logger.debug("WebSocket broadcast not available")
+            except Exception as e:
+                logger.error(f"Error broadcasting alert: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+            
+            return alert_dict
+            
+        except Exception as e:
+            logger.error(f"Error creating alert: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            
+            # Rollback in case of error
+            self.db.rollback()
             return None
 
 
