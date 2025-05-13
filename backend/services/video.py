@@ -16,14 +16,13 @@ logger = logging.getLogger(__name__)
 
 class FrameBuffer:
     """
-    Thread-safe circular buffer for frames to decouple frame capture from processing.
-    This reduces frame drops and allows smoother processing.
+    Thread-safe circular buffer for frames with improved efficiency.
     """
     def __init__(self, maxsize=30):
         self.buffer = queue.Queue(maxsize=maxsize)
         self.last_frame = None
         self.last_put_time = time.time()
-        self.skip_count = 0  # Track skipped frames for rate control
+        self.skip_count = 0
     
     def put(self, frame):
         """Add a frame to the buffer, dropping oldest frame if buffer is full."""
@@ -31,41 +30,32 @@ class FrameBuffer:
             return
         
         current_time = time.time()
-        time_since_last = current_time - self.last_put_time
-            
-        # Save this frame regardless of whether it goes into the buffer
         self.last_frame = frame.copy()
         
-        # Only add every 2nd frame to buffer to prevent processing backlog
-        # This helps keep real-time detection more current with the video
+        # Frame rate control
         self.skip_count += 1
-        if self.skip_count < 2:  # Skip this frame
+        if self.skip_count < 2:  # Skip every other frame
             return
         
-        # Reset counter
         self.skip_count = 0
         self.last_put_time = current_time
         
         try:
-            # Try to add to buffer, dropping oldest frame if needed
             if self.buffer.full():
                 try:
-                    # Remove oldest frame
                     self.buffer.get_nowait()
                 except queue.Empty:
                     pass
             
             self.buffer.put_nowait(frame)
         except:
-            # If any error occurs, just continue
             pass
     
     def get(self):
-        """Get a frame from the buffer, returning last frame if buffer is empty."""
+        """Get a frame from the buffer."""
         try:
             return self.buffer.get_nowait()
         except queue.Empty:
-            # Return the last frame we saw if buffer is empty
             return self.last_frame
     
     def clear(self):
@@ -79,10 +69,7 @@ class FrameBuffer:
 
 class VideoProcessor:
     """
-    Advanced video processing service that captures frames from 
-    camera streams and processes them for safety violation detection.
-    Features include multi-threaded processing, frame buffering,
-    and performance monitoring.
+    Enhanced video processing service with batch processing capabilities.
     """
     
     def __init__(
@@ -92,6 +79,7 @@ class VideoProcessor:
         detection_service,
         alert_service,
         frame_sample_rate: int = 5,
+        batch_size: int = 4,
         reconnect_delay: float = 3.0,
         max_reconnect_attempts: int = 10,
         buffer_size: int = 60
@@ -101,6 +89,7 @@ class VideoProcessor:
         self.detection_service = detection_service
         self.alert_service = alert_service
         self.frame_sample_rate = frame_sample_rate
+        self.batch_size = batch_size
         self.reconnect_delay = reconnect_delay
         self.max_reconnect_attempts = max_reconnect_attempts
         
@@ -120,32 +109,33 @@ class VideoProcessor:
         # Performance metrics
         self.fps = 0
         self.processing_fps = 0
-        self.detection_times = []  # Keep last 50 detection times
-        self.frame_times = []      # Keep last 50 frame capture times
+        self.detection_times = []
+        self.frame_times = []
+        self.batch_processing_times = []
         
-        # Frame buffer for async processing
+        # Batch processing
+        self.batch_buffer = []
+        self.batch_results_queue = queue.Queue()
+        
+        # Frame buffer
         self.frame_buffer = FrameBuffer(maxsize=buffer_size)
         
         # Processing threads
         self.capture_thread = None
         self.process_thread = None
+        self.batch_thread = None
         
-        # Session ID for logging & tracking
+        # Session ID
         self.session_id = str(uuid.uuid4())[:8]
         
-        # Violation tracking - store personID -> last violation time
-        # Using bounding box coordinates as a simple person ID
+        # Violation tracking
         self.violation_history = {}
-        # Timeout for repeated violations (10 minutes = 600 seconds)
-        self.violation_timeout = 600
+        self.violation_timeout = 600  # 10 minutes
         
-        logger.info(f"Initialized video processor for camera {camera_id} (session: {self.session_id})")
+        logger.info(f"Initialized enhanced video processor for camera {camera_id} (session: {self.session_id})")
     
     def start(self) -> bool:
-        """
-        Start video processing in background threads.
-        Returns True if started successfully.
-        """
+        """Start video processing with batch capabilities."""
         if self.is_running:
             logger.info(f"Camera {self.camera_id} already running")
             return True
@@ -160,7 +150,7 @@ class VideoProcessor:
             self.reconnect_attempts = 0
             self.frame_buffer.clear()
             
-            # Start capture thread
+            # Start threads
             self.capture_thread = threading.Thread(
                 target=self._capture_frames,
                 daemon=True,
@@ -168,7 +158,13 @@ class VideoProcessor:
             )
             self.capture_thread.start()
             
-            # Start processing thread
+            self.batch_thread = threading.Thread(
+                target=self._batch_processor,
+                daemon=True,
+                name=f"batch-{self.camera_id}"
+            )
+            self.batch_thread.start()
+            
             self.process_thread = threading.Thread(
                 target=self._process_frames,
                 daemon=True,
@@ -176,7 +172,7 @@ class VideoProcessor:
             )
             self.process_thread.start()
             
-            logger.info(f"Started processing for camera {self.camera_id} (session: {self.session_id})")
+            logger.info(f"Started enhanced processing for camera {self.camera_id}")
             return True
             
         except Exception as e:
@@ -194,25 +190,24 @@ class VideoProcessor:
         self.is_running = False
         
         # Wait for threads to finish
-        if self.capture_thread:
-            self.capture_thread.join(timeout=2.0)
-            self.capture_thread = None
+        threads = [self.capture_thread, self.process_thread, self.batch_thread]
+        for thread in threads:
+            if thread:
+                thread.join(timeout=2.0)
         
-        if self.process_thread:
-            self.process_thread.join(timeout=2.0)
-            self.process_thread = None
-        
-        # Clear buffer
+        # Clear buffers
         self.frame_buffer.clear()
+        self.batch_buffer.clear()
         
-        # Calculate final stats
+        # Log final stats
         duration = time.time() - self.start_time if self.start_time else 0
         if duration > 0:
             avg_fps = self.frame_count / duration
             avg_proc_fps = self.processed_count / duration
-            logger.info(f"Camera {self.camera_id} stats: Duration={duration:.1f}s, "
-                       f"Frames={self.frame_count}, Processed={self.processed_count}, "
-                       f"Alerts={self.alert_count}, Avg FPS={avg_fps:.2f}, Avg Proc FPS={avg_proc_fps:.2f}")
+            logger.info(f"Camera {self.camera_id} final stats: "
+                       f"Duration={duration:.1f}s, Frames={self.frame_count}, "
+                       f"Processed={self.processed_count}, Alerts={self.alert_count}, "
+                       f"Avg FPS={avg_fps:.2f}, Avg Proc FPS={avg_proc_fps:.2f}")
         
         return True
     
@@ -221,8 +216,6 @@ class VideoProcessor:
         if self.annotated_frame is not None:
             return self.annotated_frame
         elif self.current_frame is not None:
-            # If we have a current frame but no annotated frame yet,
-            # quickly create a basic annotated version
             return self._add_frame_metadata(self.current_frame.copy())
         return None
     
@@ -232,9 +225,11 @@ class VideoProcessor:
         avg_fps = self.frame_count / duration if duration > 0 else 0
         avg_processing_fps = self.processed_count / duration if duration > 0 else 0
         
-        # Calculate averages if we have data
+        # Calculate average detection times
         avg_detection_time = (sum(self.detection_times) / len(self.detection_times) 
                              if self.detection_times else 0)
+        avg_batch_time = (sum(self.batch_processing_times) / len(self.batch_processing_times)
+                         if self.batch_processing_times else 0)
         
         return {
             "camera_id": self.camera_id,
@@ -248,75 +243,48 @@ class VideoProcessor:
             "avg_fps": avg_fps,
             "avg_processing_fps": avg_processing_fps,
             "avg_detection_time_ms": avg_detection_time * 1000,
+            "avg_batch_time_ms": avg_batch_time * 1000,
             "last_frame_time": self.last_frame_time.isoformat() if self.last_frame_time else None,
-            "session_id": self.session_id
+            "session_id": self.session_id,
+            "batch_size": self.batch_size
         }
     
     def _capture_frames(self) -> None:
-        """
-        Background thread to capture frames from the camera stream.
-        Handles reconnection and error recovery.
-        """
+        """Background thread to capture frames from the camera stream."""
         cap = None
         last_frame_time = time.time()
         frames_since_log = 0
         
         try:
             while self.is_running:
-                # Check if we need to open or reopen the capture
+                # Handle connection logic
                 if cap is None or (hasattr(cap, 'isOpened') and not cap.isOpened()):
-                    # If we've reached max reconnect attempts, stop trying
                     if self.reconnect_attempts >= self.max_reconnect_attempts:
-                        logger.error(f"Max reconnect attempts ({self.max_reconnect_attempts}) reached for camera {self.camera_id}. Stopping processing.")
+                        logger.error(f"Max reconnect attempts reached for camera {self.camera_id}")
                         self.is_running = False
                         break
                     
                     try:
-                        # Try to open the video source
                         if cap is not None:
-                            cap.release()  # Release any existing capture
+                            cap.release()
                         
-                        # Handle file:/// URLs properly
                         camera_url = self.camera_url
                         if camera_url.startswith("file:///"):
-                            # Convert file:/// URL to proper path
-                            # Strip file:/// prefix and convert to absolute path
-                            file_path = camera_url.replace("file:///", "/")
-                            logger.info(f"Opening local video file: {file_path}")
-                            camera_url = file_path
+                            camera_url = camera_url.replace("file:///", "/")
                         
                         logger.info(f"Connecting to camera {self.camera_id} (attempt {self.reconnect_attempts + 1})")
                         
-                        # Configure OpenCV capture based on stream type
+                        # Configure based on stream type
                         if camera_url.startswith("rtsp://"):
-                            # For RTSP streams, use TCP transport for more reliable streaming
-                            # and configure buffer size and other RTSP-specific settings
-                            logger.info(f"Configuring RTSP stream: {camera_url}")
-                            
-                            # Use TCP instead of UDP for RTSP
                             cap = cv2.VideoCapture(camera_url, cv2.CAP_FFMPEG)
-                            
-                            # Set RTSP transport to TCP
                             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'H264'))
-                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Small buffer for realtime
-                            
-                            # Key RTSP configuration options for better performance
-                            # These settings significantly improve RTSP stream reliability
+                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                             cap.set(cv2.CAP_PROP_RTSP_TRANSPORT, cv2.CAP_RTSP_TRANSPORT_TCP)
-                            
-                            # Skip frames if we can't keep up (lower latency)
-                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)  # Request reasonable resolution
-                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                            
-                            # Set lower receive timeout for faster failure detection
-                            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 3000)  # 3-second timeout
+                            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 3000)
                             cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3000)
                         else:
-                            # For non-RTSP sources, use standard configuration
                             cap = cv2.VideoCapture(camera_url)
-                            
-                            # Set capture properties if possible
-                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffer for realtime
+                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                         
                         if not cap.isOpened():
                             logger.warning(f"Could not open video stream at {camera_url}")
@@ -324,7 +292,7 @@ class VideoProcessor:
                             time.sleep(self.reconnect_delay)
                             continue
                         else:
-                            self.reconnect_attempts = 0  # Reset after successful connection
+                            self.reconnect_attempts = 0
                             logger.info(f"Successfully connected to camera {self.camera_id}")
                     except Exception as e:
                         logger.error(f"Error opening camera {self.camera_id}: {str(e)}")
@@ -338,195 +306,185 @@ class VideoProcessor:
                     
                     if not ret or frame is None:
                         logger.warning(f"Failed to read frame from camera {self.camera_id}")
-                        time.sleep(0.1)  # Small delay to avoid busy wait
-                        continue
+                        
+                        # If this is a file source, try to reopen it (looping video)
+                        if self.camera_url.startswith("file:///") or not self.camera_url.startswith(("rtsp://", "http://", "https://")):
+                            logger.info(f"Reopening video file for camera {self.camera_id}")
+                            if cap is not None:
+                                cap.release()
+                            
+                            camera_url = self.camera_url
+                            if camera_url.startswith("file:///"):
+                                camera_url = camera_url.replace("file:///", "/")
+                            
+                            cap = cv2.VideoCapture(camera_url)
+                            ret, frame = cap.read()
+                            
+                            if not ret or frame is None:
+                                logger.error(f"Could not reopen video file for camera {self.camera_id}")
+                                time.sleep(0.5)
+                                continue
+                            
+                            logger.info(f"Successfully reopened video file for camera {self.camera_id}")
+                        else:
+                            # For streaming sources, just wait a bit and retry
+                            time.sleep(0.1)
+                            continue
                     
-                    # Update frame count and timestamp
+                    # Update metrics
                     self.frame_count += 1
                     now = time.time()
                     frame_time = now - last_frame_time
                     last_frame_time = now
                     
-                    # Calculate FPS over the last second
+                    # Calculate FPS
                     self.frame_times.append(frame_time)
-                    if len(self.frame_times) > 50:  # Keep size manageable
+                    if len(self.frame_times) > 50:
                         self.frame_times.pop(0)
                     
                     self.fps = 1.0 / (sum(self.frame_times) / len(self.frame_times))
                     
-                    # Log status periodically
+                    # Log periodically
                     frames_since_log += 1
-                    if frames_since_log >= 100:  # Log every 100 frames
+                    if frames_since_log >= 100:
                         frames_since_log = 0
-                        logger.debug(
-                            f"Camera {self.camera_id}: Capturing at {self.fps:.1f} FPS, "
-                            f"processing at {self.processing_fps:.1f} FPS, "
-                            f"total frames: {self.frame_count}"
-                        )
+                        logger.debug(f"Camera {self.camera_id}: Capturing at {self.fps:.1f} FPS")
                     
-                    # Add to frame buffer for processing
+                    # Add to frame buffer
                     self.frame_buffer.put(frame)
                     
                 except Exception as e:
                     logger.error(f"Error reading from camera {self.camera_id}: {str(e)}")
-                    # If we have capture errors, wait briefly to avoid rapid reconnection
                     time.sleep(0.5)
                     continue
                 
-                # Prevent 100% CPU usage
-                time.sleep(0.001)
+                time.sleep(0.001)  # Prevent 100% CPU usage
         
         except Exception as e:
             logger.error(f"Capture thread error for camera {self.camera_id}: {str(e)}")
             logger.error(traceback.format_exc())
         finally:
-            # Clean up resources
             if cap is not None:
                 cap.release()
             logger.info(f"Capture thread for camera {self.camera_id} terminated")
     
-    def _process_frames(self) -> None:
-        """
-        Background thread to process frames from the buffer.
-        Performs detection and handles safety violations.
-        """
-        frames_since_detection = 0
-        accumulated_detection_time = 0
-        detection_count = 0
-        avg_detection_time = 0
-        adaptive_sample_rate = self.frame_sample_rate  # Start with the configured sample rate
+    def _batch_processor(self) -> None:
+        """Background thread for batch processing frames."""
+        batch_buffer = []
+        last_batch_time = time.time()
         
         try:
             while self.is_running:
-                start_time = time.time()
-                
-                # Get a frame from the buffer
+                # Collect frames for batch
                 frame = self.frame_buffer.get()
+                if frame is not None:
+                    batch_buffer.append(frame)
                 
-                # Skip if no frame is available
-                if frame is None:
-                    time.sleep(0.01)  # Short sleep to prevent CPU spinning
-                    continue
+                # Process batch when full or timeout
+                current_time = time.time()
+                should_process = (len(batch_buffer) >= self.batch_size or 
+                                (len(batch_buffer) > 0 and current_time - last_batch_time > 0.1))
                 
-                # Store the raw frame
-                self.current_frame = frame.copy()
-                self.last_frame_time = datetime.now()
-                
-                # Count processed frames
-                self.processed_count += 1
-                
-                # Check if we should run detection on this frame
-                # Use adaptive sampling based on performance
-                should_detect = frames_since_detection >= adaptive_sample_rate
-                
-                if should_detect:
-                    # Run object detection
-                    detection_start = time.time()
+                if should_process:
+                    start_time = time.time()
+                    
                     try:
-                        logger.debug(f"Running detection on frame for camera {self.camera_id}")
-                        detections = self.detection_service.detect(frame)
-                        detection_time = time.time() - detection_start
+                        # Process each frame individually since batch processing isn't implemented yet
+                        batch_results = []
+                        for frame in batch_buffer:
+                            results = self.detection_service.detect(frame)
+                            batch_results.append(results)
                         
-                        # Log detection count
-                        logger.debug(f"Camera {self.camera_id}: Found {len(detections)} detections in {detection_time:.3f}s")
+                        # Store results with frames
+                        for frame, results in zip(batch_buffer, batch_results):
+                            self.batch_results_queue.put((frame, results))
                         
-                        # Update detection performance metrics
-                        self.detection_times.append(detection_time)
-                        if len(self.detection_times) > 50:
-                            self.detection_times.pop(0)
+                        batch_time = time.time() - start_time
+                        self.batch_processing_times.append(batch_time)
+                        if len(self.batch_processing_times) > 50:
+                            self.batch_processing_times.pop(0)
                         
-                        # Keep track of accumulated detection time for adaptive sampling
-                        accumulated_detection_time += detection_time
-                        detection_count += 1
-                        if detection_count >= 10:  # Recalculate after 10 detections
-                            avg_detection_time = accumulated_detection_time / detection_count
-                            
-                            # Adjust sample rate based on performance
-                            # Target: Keep detection overhead under 40% of total processing time
-                            if avg_detection_time > 0.2:  # More than 200ms per detection
-                                adaptive_sample_rate = min(adaptive_sample_rate + 1, 15)  # Increase, max 15
-                                logger.debug(f"Camera {self.camera_id}: Increasing sample rate to {adaptive_sample_rate}")
-                            elif avg_detection_time < 0.05:  # Less than 50ms per detection
-                                adaptive_sample_rate = max(adaptive_sample_rate - 1, 1)  # Decrease, min 1
-                                logger.debug(f"Camera {self.camera_id}: Decreasing sample rate to {adaptive_sample_rate}")
-                            
-                            # Reset accumulators
-                            accumulated_detection_time = 0
-                            detection_count = 0
+                        logger.debug(f"Processed batch of {len(batch_buffer)} frames in {batch_time:.3f}s")
                         
-                        # Record when we last ran detection
-                        self.last_detection_time = time.time()
-                        frames_since_detection = 0
-                        
-                        # If detections found, process for safety violations
-                        if detections:
-                            # Process each detection for potential violations
-                            self._process_detections(frame, detections)
-                            
-                            # Create annotated frame with all detections
-                            self.annotated_frame = self._annotate_frame(frame, detections)
-                        else:
-                            # Just add metadata overlay if no detections
-                            self.annotated_frame = self._add_frame_metadata(frame)
                     except Exception as e:
-                        logger.error(f"Detection error for camera {self.camera_id}: {str(e)}")
-                        logger.error(traceback.format_exc())
-                        # Still create an annotated frame with error indication
-                        self.annotated_frame = self._add_frame_metadata(frame)
-                        frames_since_detection = 0  # Reset to force another attempt soon
-                else:
-                    # For frames where we skip detection, still annotate with basic info
-                    self.annotated_frame = self._add_frame_metadata(frame.copy())
-                    frames_since_detection += 1
+                        logger.error(f"Batch processing error: {str(e)}")
+                        # Add frames without results to prevent blocking
+                        for frame in batch_buffer:
+                            self.batch_results_queue.put((frame, []))
+                    
+                    batch_buffer.clear()
+                    last_batch_time = current_time
                 
-                # Calculate processing frame rate
-                processing_time = time.time() - start_time
-                if processing_time > 0:
-                    self.processing_fps = 1.0 / processing_time
-                
-                # If processing is very fast, add a small delay to prevent CPU spinning
-                if processing_time < 0.01:
-                    time.sleep(0.01 - processing_time)
-                
+                time.sleep(0.01)  # Small delay to prevent busy waiting
+        
         except Exception as e:
-            logger.error(f"Error in processing thread for camera {self.camera_id}: {str(e)}")
+            logger.error(f"Batch processor error for camera {self.camera_id}: {str(e)}")
+            logger.error(traceback.format_exc())
+    
+    def _process_frames(self) -> None:
+        """Background thread to process batch results and generate alerts."""
+        try:
+            while self.is_running:
+                try:
+                    # Get frame and results from batch processor
+                    frame, detections = self.batch_results_queue.get(timeout=0.1)
+                    
+                    # Store frame and update metrics
+                    self.current_frame = frame.copy()
+                    self.last_frame_time = datetime.now()
+                    self.processed_count += 1
+                    
+                    # Calculate processing FPS
+                    start_time = time.time()
+                    
+                    # Process detections for violations
+                    if detections:
+                        self._process_detections(frame, detections)
+                        self.annotated_frame = self._annotate_frame(frame, detections)
+                    else:
+                        self.annotated_frame = self._add_frame_metadata(frame)
+                    
+                    processing_time = time.time() - start_time
+                    if processing_time > 0:
+                        self.processing_fps = 1.0 / processing_time
+                    
+                except queue.Empty:
+                    if self.current_frame is not None:
+                        # If no new frames, just update metadata overlay
+                        self.annotated_frame = self._add_frame_metadata(self.current_frame.copy())
+                    continue
+                except Exception as e:
+                    logger.error(f"Frame processing error: {str(e)}")
+                    continue
+        
+        except Exception as e:
+            logger.error(f"Process thread error for camera {self.camera_id}: {str(e)}")
             logger.error(traceback.format_exc())
     
     def _annotate_frame(self, frame, detections) -> np.ndarray:
-        """
-        Draw detection boxes, labels, and metadata on the frame.
-        
-        Args:
-            frame: Original video frame
-            detections: List of detection dictionaries
-            
-        Returns:
-            Annotated frame with boxes, labels, and metadata
-        """
+        """Draw detection boxes, labels, and metadata on the frame."""
         try:
-            # Make a copy to avoid modifying the original
             annotated = frame.copy()
             
-            # Define colors for different classes and violations
+            # Enhanced color mapping
             color_map = {
-                "person": (0, 255, 0),  # Green for persons without violations
-                "hardhat": (0, 255, 255),  # Yellow for hardhat
-                "vest": (255, 128, 0),  # Orange for vest
-                "violation": (0, 0, 255),  # Red for violations
-                "mask": (255, 0, 255),  # Purple for mask
-                "goggles": (255, 255, 0),  # Cyan for goggles
-                "gloves": (128, 0, 255),  # Purple for gloves
-                "boots": (0, 128, 255),  # Light blue for boots
+                "person": (0, 255, 0),      # Green for safe persons
+                "hardhat": (0, 255, 255),   # Yellow for hardhat
+                "vest": (255, 128, 0),      # Orange for vest
+                "violation": (0, 0, 255),   # Red for violations
+                "mask": (255, 0, 255),      # Purple for mask
+                "goggles": (255, 255, 0),   # Cyan for goggles
+                "gloves": (128, 0, 255),    # Purple for gloves
+                "boots": (0, 128, 255),     # Light blue for boots
             }
             
-            # Sort to draw violations on top
+            # Sort detections to draw violations on top
             detections_sorted = sorted(
-                detections, 
+                detections,
                 key=lambda d: 1 if d.get("violation", False) else 0
             )
             
-            # Log detection count for debugging
-            logger.info(f"Drawing {len(detections)} detections on frame (violations: {sum(1 for d in detections if d.get('violation', False))})")
+            logger.debug(f"Drawing {len(detections)} detections")
             
             for detection in detections_sorted:
                 bbox = detection["bbox"]
@@ -535,101 +493,100 @@ class VideoProcessor:
                 is_violation = detection.get("violation", False)
                 violation_type = detection.get("violation_type", "")
                 
-                # Convert box coordinates to integers
+                # Convert to integers and ensure within frame bounds
                 x1, y1, x2, y2 = map(int, bbox)
+                h, w = frame.shape[:2]
+                x1 = max(0, min(x1, w - 1))
+                y1 = max(0, min(y1, h - 1))
+                x2 = max(0, min(x2, w - 1))
+                y2 = max(0, min(y2, h - 1))
                 
-                # Ensure coordinates are within frame
-                x1 = max(0, min(x1, frame.shape[1] - 1))
-                y1 = max(0, min(y1, frame.shape[0] - 1))
-                x2 = max(0, min(x2, frame.shape[1] - 1))
-                y2 = max(0, min(y2, frame.shape[0] - 1))
-                
-                # Pick color based on class/violation
+                # Select color
                 if is_violation:
                     color = color_map.get("violation", (0, 0, 255))
+                    thickness = 4  # Thicker for violations
                 else:
                     color = color_map.get(label.lower(), (255, 255, 255))
+                    thickness = 2
                 
-                # Draw thicker bounding box (increased from 2 to 3 pixels)
-                cv2.rectangle(
-                    annotated,
-                    (x1, y1),
-                    (x2, y2),
-                    color,
-                    3
-                )
+                # Draw bounding box
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
                 
                 # Create label text
-                if is_violation:
-                    label_text = f"{label}: {violation_type} ({confidence:.2f})"
+                if is_violation and violation_type:
+                    label_text = f"{label}: {violation_type.replace(',', ', ')} ({confidence:.2f})"
+                    # Add detected PPE if it's a person
+                    if detection.get("detected_ppe"):
+                        ppe_list = ", ".join(detection["detected_ppe"])
+                        label_text += f" | Has: {ppe_list}"
                 else:
                     label_text = f"{label}: {confidence:.2f}"
                 
-                # Get text size for background
-                text_size, baseline = cv2.getTextSize(
-                    label_text, 
-                    cv2.FONT_HERSHEY_SIMPLEX, 
-                    0.6,  # Increased from 0.5 
-                    2
-                )
+                # Get text dimensions
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.6
+                thickness_text = 2
+                text_size, baseline = cv2.getTextSize(label_text, font, font_scale, thickness_text)
                 
-                # Draw filled background for text (more visible)
+                # Draw text background
+                text_background = (0, 0, 0) if is_violation else color
                 cv2.rectangle(
                     annotated,
                     (x1, max(0, y1 - text_size[1] - 10)),
                     (x1 + text_size[0] + 10, y1),
-                    color,
-                    -1  # Filled rectangle
+                    text_background,
+                    -1
                 )
                 
-                # Draw label with increased size
+                # Draw text
                 cv2.putText(
                     annotated,
                     label_text,
                     (x1 + 5, max(15, y1 - 5)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,  # Increased from 0.5
+                    font,
+                    font_scale,
                     (255, 255, 255),
-                    2
+                    thickness_text
                 )
                 
-                # For violations, add extra highlight
+                # Draw violation indicator
                 if is_violation:
-                    # Draw a second, outer box for emphasis
-                    cv2.rectangle(
+                    # Add warning triangle
+                    triangle_size = 20
+                    triangle_points = np.array([
+                        [x2 - triangle_size, y1],
+                        [x2, y1],
+                        [x2, y1 + triangle_size]
+                    ], np.int32)
+                    cv2.fillPoly(annotated, [triangle_points], (0, 0, 255))
+                    cv2.putText(
                         annotated,
-                        (x1-5, y1-5),
-                        (x2+5, y2+5),
-                        (0, 0, 255),
-                        1
+                        "!",
+                        (x2 - 15, y1 + 15),
+                        font,
+                        0.7,
+                        (255, 255, 255),
+                        2
                     )
             
-            # Add frame metadata (timestamp, FPS, etc.)
+            # Add comprehensive frame metadata
             return self._add_frame_metadata(annotated)
             
         except Exception as e:
             logger.error(f"Error annotating frame: {str(e)}")
-            # If annotation fails, return original frame with minimal metadata
             return self._add_frame_metadata(frame.copy())
     
     def _add_frame_metadata(self, frame) -> np.ndarray:
-        """
-        Add timestamp, camera info, and performance metrics to frame.
-        
-        Args:
-            frame: Video frame to annotate
-            
-        Returns:
-            Frame with added metadata overlay
-        """
+        """Add comprehensive metadata overlay to frame."""
         try:
-            # Add transparent overlay at the bottom
             h, w = frame.shape[:2]
-            overlay_h = 60  # Height of the overlay area
+            overlay_h = 80  # Increased height for more info
+            
+            # Create dark overlay for text
             overlay = frame[h - overlay_h:h, 0:w].copy()
             overlay = cv2.addWeighted(
-                overlay, 0.5, 
-                np.zeros(overlay.shape, dtype=overlay.dtype) + np.array([0, 0, 50], dtype=np.uint8), 
+                overlay, 0.5,
+                np.zeros(overlay.shape, dtype=overlay.dtype) + np.array([0, 0, 50], dtype=np.uint8),
                 0.5, 0
             )
             frame[h - overlay_h:h, 0:w] = overlay
@@ -639,7 +596,7 @@ class VideoProcessor:
             cv2.putText(
                 frame,
                 f"Time: {timestamp}",
-                (10, h - 40),
+                (10, h - 60),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
                 (255, 255, 255),
@@ -649,7 +606,19 @@ class VideoProcessor:
             # Add camera info
             cv2.putText(
                 frame,
-                f"Camera: {self.camera_id} (Session: {self.session_id})",
+                f"Camera: {self.camera_id} | Session: {self.session_id}",
+                (10, h - 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                1
+            )
+            
+            # Add performance metrics (left side)
+            metrics_text = f"FPS: {self.fps:.1f} | Processing: {self.processing_fps:.1f}"
+            cv2.putText(
+                frame,
+                metrics_text,
                 (10, h - 20),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
@@ -657,12 +626,12 @@ class VideoProcessor:
                 1
             )
             
-            # Add performance metrics
-            metrics_text = f"FPS: {self.fps:.1f} | Processing: {self.processing_fps:.1f} FPS | Alerts: {self.alert_count}"
-            text_size = cv2.getTextSize(metrics_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)[0]
+            # Add statistics (right side)
+            stats_text = f"Alerts: {self.alert_count} | Frames: {self.frame_count}"
+            text_size = cv2.getTextSize(stats_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)[0]
             cv2.putText(
                 frame,
-                metrics_text,
+                stats_text,
                 (w - text_size[0] - 10, h - 20),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
@@ -670,63 +639,60 @@ class VideoProcessor:
                 1
             )
             
+            # Add system status indicator
+            status_color = (0, 255, 0) if self.is_running else (0, 0, 255)
+            cv2.circle(frame, (w - 20, 20), 8, status_color, -1)
+            cv2.circle(frame, (w - 20, 20), 8, (255, 255, 255), 2)
+            
             return frame
             
         except Exception as e:
             logger.error(f"Error adding frame metadata: {str(e)}")
-            return frame  # Return unmodified frame if error occurs
-
+            return frame
+    
     def _process_detections(self, frame, detections) -> None:
-        """
-        Process detections to identify safety violations and generate alerts.
-        
-        Args:
-            frame: The original frame
-            detections: List of detection dictionaries
-        """
+        """Process detections to identify violations and generate alerts."""
         try:
             # Filter for violations
             violations = [d for d in detections if d.get("violation", False)]
             
             if not violations:
                 return
-                
-            # Process each violation to generate alerts
+            
             current_time = time.time()
-                
-            # Only generate alerts if enough time has passed since the last one
-            if (current_time - self.last_alert_time) < 5.0:  # 5 second minimum between alerts
+            
+            # Rate limiting for alerts
+            if (current_time - self.last_alert_time) < 5.0:
                 return
-                
+            
             for violation in violations:
-                # Extract violation info
                 violation_type = violation.get("violation_type", "Unknown violation")
                 confidence = violation.get("confidence", 0.0)
                 bbox = violation.get("bbox")
+                detected_ppe = violation.get("detected_ppe", [])
                 
-                # Skip this violation if we've already alerted about this person recently
+                # Skip if already alerted recently for this position
                 if bbox:
-                    # Create a simple "person ID" from the bounding box coordinates
-                    # We round to nearest 10 pixels to allow for slight movement
                     person_id = f"{int(bbox[0]/10)},{int(bbox[1]/10)},{int(bbox[2]/10)},{int(bbox[3]/10)}"
                     
-                    # Check if we've seen this person recently
                     if person_id in self.violation_history:
                         last_violation_time = self.violation_history[person_id]
-                        # If violation was detected within timeout period, skip this alert
                         if (current_time - last_violation_time) < self.violation_timeout:
-                            logger.info(f"Skipping repeated violation for same person within 10 minutes: {violation_type}")
+                            logger.debug(f"Skipping repeated violation for same person: {violation_type}")
                             continue
                 
-                # Additional metadata to include with the alert
+                # Enhanced metadata
                 metadata = {
                     "session_id": self.session_id,
                     "frame_count": self.frame_count,
                     "detection_class": violation.get("class", ""),
-                    "bbox": bbox
+                    "bbox": bbox,
+                    "detected_ppe": detected_ppe,
+                    "fps": self.fps,
+                    "processing_fps": self.processing_fps
                 }
                 
-                # Create alert through alert service
+                # Create alert
                 alert = self.alert_service.create_alert(
                     camera_id=self.camera_id,
                     violation_type=violation_type,
@@ -741,24 +707,22 @@ class VideoProcessor:
                     self.alert_count += 1
                     logger.info(f"Generated alert for camera {self.camera_id}: {violation_type} ({confidence:.2f})")
                     
-                    # Update violation history for this person
+                    # Update violation history
                     if bbox:
                         person_id = f"{int(bbox[0]/10)},{int(bbox[1]/10)},{int(bbox[2]/10)},{int(bbox[3]/10)}"
                         self.violation_history[person_id] = current_time
                         
-                        # Clean up old entries in violation history 
-                        # (we can do this occasionally to prevent memory growth)
+                        # Cleanup old entries periodically
                         if self.alert_count % 10 == 0:
                             for p_id in list(self.violation_history.keys()):
                                 if (current_time - self.violation_history[p_id]) > self.violation_timeout:
                                     del self.violation_history[p_id]
                     
-                    # Only create one alert at a time to prevent alert flooding
+                    # Only create one alert at a time
                     break
                     
         except Exception as e:
             logger.error(f"Error processing detections: {str(e)}")
-            import traceback
             logger.error(traceback.format_exc())
 
 
@@ -776,58 +740,36 @@ def start_processor(
     alert_service,
     frame_sample_rate: int = 5
 ) -> bool:
-    """
-    Start a new video processor for camera.
-    
-    Args:
-        camera_id: Camera identifier
-        camera_url: URL or path to video source
-        detection_service: Object detection service
-        alert_service: Alert generation service
-        frame_sample_rate: Process 1 out of N frames
-        
-    Returns:
-        True if processor started successfully
-    """
-    # Check if already running
+    """Start a new enhanced video processor for camera."""
     if camera_id in _active_processors:
         logger.info(f"Camera {camera_id} already has an active processor")
         return True
     
     try:
-        # Create processor
         processor = VideoProcessor(
             camera_id=camera_id,
             camera_url=camera_url,
             detection_service=detection_service,
             alert_service=alert_service,
-            frame_sample_rate=frame_sample_rate
+            frame_sample_rate=frame_sample_rate,
+            batch_size=4  # Optimized batch size
         )
         
-        # Start processor
         if processor.start():
             _active_processors[camera_id] = processor
-            logger.info(f"Started processor for camera {camera_id}")
+            logger.info(f"Started enhanced processor for camera {camera_id}")
             return True
         else:
-            logger.error(f"Failed to start processor for camera {camera_id}")
+            logger.error(f"Failed to start enhanced processor for camera {camera_id}")
             return False
             
     except Exception as e:
-        logger.error(f"Error creating processor for camera {camera_id}: {str(e)}")
+        logger.error(f"Error creating enhanced processor for camera {camera_id}: {str(e)}")
         logger.error(traceback.format_exc())
         return False
 
 def stop_processor(camera_id: int) -> bool:
-    """
-    Stop video processor for camera.
-    
-    Args:
-        camera_id: Camera identifier
-        
-    Returns:
-        True if processor stopped successfully
-    """
+    """Stop video processor for camera."""
     processor = _active_processors.get(camera_id)
     if not processor:
         logger.warning(f"No active processor for camera {camera_id}")
@@ -836,7 +778,7 @@ def stop_processor(camera_id: int) -> bool:
     try:
         processor.stop()
         del _active_processors[camera_id]
-        logger.info(f"Stopped processor for camera {camera_id}")
+        logger.info(f"Stopped enhanced processor for camera {camera_id}")
         return True
     except Exception as e:
         logger.error(f"Error stopping processor for camera {camera_id}: {str(e)}")

@@ -3,27 +3,28 @@ import numpy as np
 import logging
 import time
 import cv2
+import torch
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 
 # Import ultralytics
 from ultralytics import YOLO
 
-from backend.config import MODEL_PATH, CONFIDENCE_THRESHOLD, MODELS_DIR
+from backend.config import MODEL_PATH, CONFIDENCE_THRESHOLD, MODELS_DIR, DEVICE
 
 logger = logging.getLogger(__name__)
 
 class DetectionService:
     """
-    Service for object detection using YOLO models with optimized implementation
-    for safety violation detection in manufacturing environments.
+    Enhanced detection service with real PPE detection using YOLOv11.
+    Detects persons and their PPE items (hardhat, vest, etc.) and determines violations.
     """
     
     def __init__(
         self, 
         model_path: str = MODEL_PATH, 
         confidence: float = CONFIDENCE_THRESHOLD,
-        device: Optional[str] = None  # Auto-select device (CPU/GPU)
+        device: Optional[str] = DEVICE  # Auto-select device (CPU/GPU) from config
     ):
         self.model_path = model_path
         self.confidence = confidence
@@ -32,35 +33,40 @@ class DetectionService:
         self.class_names = {}
         self.last_inference_time = 0
         
-        # PPE class mapping - maps different class name variations to standardized categories
+        # PPE class mapping - maps YOLO class names to standard categories
         self.ppe_class_mapping = {
-            'person': ['person', 'people', 'human'],
-            'hardhat': ['hardhat', 'helmet', 'hard hat', 'safety helmet', 'construction helmet'],
-            'vest': ['vest', 'safety vest', 'high-vis vest', 'high-visibility vest', 'reflective vest'],
-            'mask': ['mask', 'face mask', 'safety mask', 'respirator'],
-            'goggles': ['goggles', 'safety goggles', 'eye protection', 'safety glasses'],
-            'gloves': ['gloves', 'safety gloves', 'hand protection', 'work gloves'],
-            'boots': ['boots', 'safety boots', 'foot protection', 'work boots']
+            'person': 'person',
+            'hardhat': 'hardhat',
+            'helmet': 'hardhat',
+            'hard_hat': 'hardhat',
+            'safety_helmet': 'hardhat',
+            'vest': 'vest',
+            'safety_vest': 'vest',
+            'high_vis_vest': 'vest',
+            'reflective_vest': 'vest',
+            'mask': 'mask',
+            'face_mask': 'mask',
+            'safety_mask': 'mask',
+            'goggles': 'goggles',
+            'safety_goggles': 'goggles',
+            'gloves': 'gloves',
+            'safety_gloves': 'gloves',
+            'boots': 'boots',
+            'safety_boots': 'boots',
+            'no_hardhat': 'no_hardhat',
+            'no_helmet': 'no_hardhat',
+            'no_vest': 'no_vest',
+            'no_safety_vest': 'no_vest'
         }
         
-        # Violation rules - defines which PPE items are required
-        self.violation_rules = {
-            'factory_floor': ['hardhat', 'vest'],
-            'chemical_area': ['hardhat', 'vest', 'mask', 'goggles', 'gloves'],
-            'construction': ['hardhat', 'vest', 'boots'],
-            'default': ['hardhat', 'vest']
-        }
+        # Required PPE by default (can be overridden by zone configuration)
+        self.default_required_ppe = ['hardhat', 'vest']
         
         # Initialize model
         self.load_model()
     
     def load_model(self) -> bool:
-        """
-        Load YOLO model with proper error handling and logging.
-        
-        Returns:
-            bool: True if model loaded successfully, False otherwise
-        """
+        """Load YOLOv11 model with proper error handling and optimization."""
         try:
             model_path = Path(self.model_path)
             
@@ -68,44 +74,56 @@ class DetectionService:
             if not model_path.exists():
                 logger.error(f"Model file not found: {self.model_path}")
                 
-                # Check if we have the yolo11m.pt model
-                default_model_path = Path(MODELS_DIR) / "yolo11m.pt"
-                if default_model_path.exists():
-                    logger.info(f"Using default model: {default_model_path}")
-                    self.model_path = str(default_model_path)
-                    model_path = default_model_path
+                # Look for alternative models
+                alternatives = [
+                    "yolo11n.pt", "yolo11s.pt", "yolo11m.pt", "yolo11l.pt", "yolo11x.pt",
+                    "yolov8n.pt", "yolov8s.pt", "yolov8m.pt"
+                ]
+                
+                for alt in alternatives:
+                    alt_path = Path(MODELS_DIR) / alt
+                    if alt_path.exists():
+                        logger.info(f"Using alternative model: {alt_path}")
+                        self.model_path = str(alt_path)
+                        model_path = alt_path
+                        break
                 else:
-                    logger.error(f"Default model not found: {default_model_path}")
-                    # Check for any .pt file
-                    pt_files = list(Path(MODELS_DIR).glob("*.pt"))
-                    if pt_files:
-                        logger.info(f"Found alternative model: {pt_files[0]}")
-                        self.model_path = str(pt_files[0])
-                        model_path = pt_files[0]
-                    else:
-                        logger.error("No model files found!")
-                        return False
+                    logger.error("No valid model files found!")
+                    return False
             
-            logger.info(f"Loading YOLO model from: {model_path} (exists: {model_path.exists()})")
+            logger.info(f"Loading YOLO model from: {model_path}")
             start_time = time.time()
             
-            # Load the model with proper device selection
-            device_args = {}
-            if self.device:
-                device_args = {"device": self.device}
-                logger.info(f"Using device: {self.device}")
+            # Log device information
+            logger.info(f"Using device: {self.device}")
             
-            # Load the model using ultralytics YOLO
+            # Load the model with specified device
             self.model = YOLO(self.model_path)
+            
+            # Force model to specified device
+            if self.device:
+                try:
+                    self.model.to(self.device)
+                except Exception as e:
+                    logger.warning(f"Failed to set device to {self.device}: {str(e)}")
+                    logger.warning("Continuing with default device")
             
             # Store class names
             self.class_names = self.model.names if hasattr(self.model, 'names') else {}
             
-            logger.info(f"Model loaded in {time.time() - start_time:.2f} seconds")
-            logger.info(f"Model has {len(self.class_names)} classes: {', '.join(list(self.class_names.values())[:10])}")
-            logger.info(f"Running on device: {self.model.device}")
+            # Log available PPE classes in the model
+            ppe_classes = []
+            for class_id, class_name in self.class_names.items():
+                if self._standardize_class(class_name) in ['hardhat', 'vest', 'mask', 'goggles', 'gloves', 'boots'] or class_name.startswith('no_'):
+                    ppe_classes.append(f"{class_id}: {class_name}")
             
-            # Run a warmup inference to initialize the model
+            logger.info(f"Model loaded in {time.time() - start_time:.2f} seconds")
+            logger.info(f"Model has {len(self.class_names)} classes")
+            logger.info(f"PPE classes available: {', '.join(ppe_classes) if ppe_classes else 'None'}")
+            logger.info(f"Device: {self.model.device}")
+            logger.info(f"Confidence threshold: {self.confidence}")
+            
+            # Run warmup inference
             self._warmup_model()
             
             return True
@@ -116,13 +134,11 @@ class DetectionService:
             return False
     
     def _warmup_model(self) -> None:
-        """Run model on a dummy image to initialize weights and optimize performance."""
+        """Run model on dummy image to initialize weights and optimize performance."""
         try:
-            # Create a dummy image (black 640x640 frame)
             dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
-            logger.info("Warming up model with dummy inference...")
+            logger.info("Warming up model...")
             start_time = time.time()
-            # Use the model to run inference on the dummy image
             _ = self.model(dummy_img, verbose=False)
             logger.info(f"Model warmup completed in {time.time() - start_time:.2f} seconds")
         except Exception as e:
@@ -130,7 +146,7 @@ class DetectionService:
     
     def detect(self, frame) -> List[Dict[str, Any]]:
         """
-        Run object detection on a frame with improved PPE violation logic.
+        Run PPE detection on a frame.
         
         Args:
             frame: Image frame (numpy array)
@@ -142,6 +158,7 @@ class DetectionService:
             - confidence: Detection confidence
             - violation: Whether this detection represents a violation
             - violation_type: Type of violation detected
+            - detected_ppe: List of PPE items detected for this person
         """
         if self.model is None:
             logger.warning("Model not loaded, attempting to reload")
@@ -161,7 +178,7 @@ class DetectionService:
                 logger.error(f"Frame is not a numpy array: {type(frame)}")
                 return []
             
-            # Ensure frame is in correct format for the model
+            # Ensure frame is in correct format
             if len(frame.shape) != 3 or frame.shape[2] != 3:
                 logger.warning(f"Unexpected frame shape: {frame.shape}, attempting to convert")
                 if len(frame.shape) == 2:  # Grayscale
@@ -175,18 +192,18 @@ class DetectionService:
             # Measure inference time
             start_time = time.time()
             
-            # Run YOLO detection with optimized parameters
+            # Run YOLO detection
             results = self.model(
-                frame, 
+                frame,
                 conf=self.confidence,
-                verbose=False,  # Reduce console output
-                augment=False,  # No TTA for inference
-                iou=0.45,  # NMS IoU threshold
+                verbose=False,
+                agnostic_nms=True,  # Class-agnostic NMS
+                max_det=100  # Maximum detections per image
             )
             
             inference_time = time.time() - start_time
             self.last_inference_time = inference_time
-            logger.info(f"Detection took {inference_time:.3f} seconds")
+            logger.debug(f"Detection inference took {inference_time:.3f} seconds")
             
             # Process results
             detections = []
@@ -198,120 +215,56 @@ class DetectionService:
             # Get the first result
             result = results[0]
             
-            # Check if result has boxes attribute
-            if not hasattr(result, 'boxes') or not hasattr(result.boxes, 'xyxy'):
+            # Check if result has boxes
+            if not hasattr(result, 'boxes') or result.boxes is None:
                 logger.warning("Invalid result format from model inference")
                 return []
                 
-            # Extract boxes, confidences, and class IDs
+            # Extract detections
             boxes = result.boxes.xyxy.cpu().numpy() if hasattr(result.boxes, 'xyxy') else []
             confs = result.boxes.conf.cpu().numpy() if hasattr(result.boxes, 'conf') else []
             class_ids = result.boxes.cls.cpu().numpy().astype(int) if hasattr(result.boxes, 'cls') else []
             
-            # Log detection counts
-            logger.info(f"Detection found {len(boxes)} objects with confidence threshold {self.confidence}")
+            logger.debug(f"Detection found {len(boxes)} objects")
             
-            # Remove the fallback detection mechanism
             if len(boxes) == 0:
                 return []
             
-            # Extract all persons first for associating PPE
+            # Separate persons and PPE items
             persons = []
             ppe_items = []
             
-            # Process all detections
             for i, (box, conf, class_id) in enumerate(zip(boxes, confs, class_ids)):
                 x1, y1, x2, y2 = box
                 
                 # Get class name
                 class_name = self.class_names.get(class_id, f"class_{class_id}")
+                standardized_class = self._standardize_class(class_name)
                 
-                # Create detection object
                 detection = {
-                    "id": i,
                     "bbox": [float(x1), float(y1), float(x2), float(y2)],
                     "class": class_name,
-                    "std_class": self._standardize_class(class_name),
-                    "confidence": float(conf)
+                    "std_class": standardized_class,
+                    "confidence": float(conf),
+                    "center": [(x1 + x2) / 2, (y1 + y2) / 2]
                 }
                 
-                # Log each detection
-                logger.debug(f"Detection {i}: {class_name} ({conf:.2f}) at {[int(x) for x in box]}")
-                
-                # Sort into persons and PPE items for further processing
-                std_class = detection["std_class"]
-                if std_class == "person":
-                    # Add person-specific fields for PPE tracking
-                    detection["has_ppe"] = {
-                        "hardhat": False,
-                        "vest": False,
-                        "mask": False,
-                        "goggles": False,
-                        "gloves": False,
-                        "boots": False
-                    }
+                if standardized_class == "person":
+                    detection["detected_ppe"] = []
                     detection["violations"] = []
                     persons.append(detection)
-                else:
+                elif standardized_class in ['hardhat', 'vest', 'mask', 'goggles', 'gloves', 'boots']:
                     ppe_items.append(detection)
-            
-            # If there are no persons detected but we have PPE items, 
-            # add a default person that covers the frame area
-            if not persons and ppe_items:
-                logger.info("No persons detected but found PPE items - adding implicit person")
-                h, w = frame.shape[:2]
-                persons.append({
-                    "id": len(ppe_items),
-                    "bbox": [0.0, 0.0, float(w), float(h)],
-                    "class": "person",
-                    "std_class": "person",
-                    "confidence": 0.5,
-                    "has_ppe": {
-                        "hardhat": False,
-                        "vest": False,
-                        "mask": False,
-                        "goggles": False,
-                        "gloves": False,
-                        "boots": False
-                    },
-                    "violations": []
-                })
-            
-            # Default all persons to having violations (for demonstration)
-            # In a real system, you would want more sophisticated PPE detection
-            if persons:
-                # Apply default safety rules for all persons
-                # This applies to all videos without zone-specific rules
-                required_ppe = ["hardhat", "vest"]  # Default required PPE
                 
-                for person in persons:
-                    # For demonstration, assume all persons are missing hardhat and vest
-                    if 'violations' not in person:
-                        person['violations'] = []
-                    
-                    # Mark as violations
-                    person["violations"].extend(["no_hardhat", "no_vest"])
-                    
-                    # Set overall violation flag and type
-                    person["violation"] = True
-                    person["violation_type"] = ",".join(person["violations"])
-                    
-                    # Clean up internal tracking fields
-                    person.pop("has_ppe", None)
-                    person.pop("id", None)
-                    person.pop("std_class", None)
-                    person.pop("violations", None)
+                detections.append(detection)
             
-            # Add PPE items to results
-            for ppe in ppe_items:
-                ppe.pop("id", None)
-                ppe.pop("std_class", None)
-                ppe["violation"] = False
-                ppe["violation_type"] = ""
-                persons.append(ppe)
+            # Associate PPE with persons
+            if persons:
+                detections = self._associate_ppe_with_persons(persons, ppe_items)
+                detections = self._check_ppe_violations(detections)
             
-            logger.info(f"Returning {len(persons)} detections (persons and PPE items)")
-            return persons
+            logger.debug(f"Processed {len(detections)} detections, {len(persons)} persons")
+            return detections
         
         except Exception as e:
             logger.error(f"Error in detection: {str(e)}")
@@ -320,15 +273,116 @@ class DetectionService:
     
     def _standardize_class(self, class_name: str) -> str:
         """Map class name to a standard category for consistent processing."""
-        class_lower = class_name.lower()
+        class_lower = class_name.lower().replace('-', '_').replace(' ', '_')
         
-        # Check each category
-        for category, variants in self.ppe_class_mapping.items():
-            if class_lower in variants or any(variant in class_lower for variant in variants):
-                return category
+        # Check for exact match first
+        if class_lower in self.ppe_class_mapping:
+            return self.ppe_class_mapping[class_lower]
         
-        # If no match found, return original
+        # Check for partial matches
+        for key, value in self.ppe_class_mapping.items():
+            if key in class_lower or class_lower in key:
+                return value
+        
+        # Return original if no match found
         return class_name
+    
+    def _associate_ppe_with_persons(self, persons: List[Dict], ppe_items: List[Dict]) -> List[Dict]:
+        """
+        Associate detected PPE items with nearby persons using spatial proximity.
+        """
+        for person in persons:
+            person_bbox = person["bbox"]
+            person_center = person["center"]
+            
+            # Create expanded search area around person
+            search_area = self._expand_bbox(person_bbox, factor=1.5)  # Increased from 1.3 to 1.5
+            
+            for ppe in ppe_items:
+                ppe_center = ppe["center"]
+                
+                # Check if PPE item is within search area
+                if self._point_in_bbox(ppe_center, search_area):
+                    # Calculate distance for weight consideration
+                    distance = self._calculate_distance(person_center, ppe_center)
+                    ppe_type = ppe["std_class"]
+                    
+                    # Add PPE to person's detected items
+                    if ppe_type not in person["detected_ppe"]:
+                        person["detected_ppe"].append(ppe_type)
+                        logger.debug(f"Associated {ppe_type} with person at {person_center}")
+        
+        return persons + ppe_items
+    
+    def _expand_bbox(self, bbox: List[float], factor: float = 1.3) -> List[float]:
+        """Expand bounding box by given factor."""
+        x1, y1, x2, y2 = bbox
+        w = x2 - x1
+        h = y2 - y1
+        
+        # Calculate expansion
+        expand_w = w * (factor - 1) / 2
+        expand_h = h * (factor - 1) / 2
+        
+        return [
+            x1 - expand_w,
+            y1 - expand_h,
+            x2 + expand_w,
+            y2 + expand_h
+        ]
+    
+    def _point_in_bbox(self, point: List[float], bbox: List[float]) -> bool:
+        """Check if a point is inside a bounding box."""
+        x, y = point
+        x1, y1, x2, y2 = bbox
+        return x1 <= x <= x2 and y1 <= y <= y2
+    
+    def _calculate_distance(self, point1: List[float], point2: List[float]) -> float:
+        """Calculate Euclidean distance between two points."""
+        x1, y1 = point1
+        x2, y2 = point2
+        return ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+    
+    def _check_ppe_violations(self, detections: List[Dict]) -> List[Dict]:
+        """
+        Check each person for PPE violations based on required equipment.
+        """
+        required_ppe = self.default_required_ppe  # Can be overridden by zone rules
+        
+        for detection in detections:
+            if detection["std_class"] != "person":
+                continue
+            
+            # Check for missing PPE
+            missing_ppe = []
+            for required in required_ppe:
+                if required not in detection["detected_ppe"]:
+                    missing_ppe.append(required)
+            
+            # Set violation flags
+            if missing_ppe:
+                # Generate appropriate violation message
+                violation_types = []
+                for item in missing_ppe:
+                    violation_types.append(f"no_{item}")
+                
+                # Add violation details
+                detection["violation"] = True
+                detection["violation_type"] = ",".join(violation_types)
+                detection["violations"] = missing_ppe
+                detection["missing_ppe"] = missing_ppe
+                
+                logger.debug(f"Violation detected: {detection['violation_type']}")
+            else:
+                detection["violation"] = False
+                detection["violation_type"] = ""
+        
+        return detections
+    
+    def set_required_ppe(self, required_ppe: List[str]) -> None:
+        """Set the list of required PPE items for violation checking."""
+        self.default_required_ppe = required_ppe
+        logger.info(f"Updated required PPE: {required_ppe}")
 
 
 # Singleton instance for global access

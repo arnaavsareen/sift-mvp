@@ -2,10 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import logging
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 import os
 from pathlib import Path
 import time
+import tempfile
+import subprocess
+import uuid
+import shutil
+import httpx
 
 from backend.database import get_db
 from backend.models import Camera
@@ -213,12 +218,11 @@ async def stream_video(
     format: str = Query("video", description="Format to stream - 'video' for direct streaming, 'hls' for HLS streaming"),
     db: Session = Depends(get_db)
 ):
-    """Stream a video file or RTSP stream directly to the browser.
-    This endpoint is used for cameras that point to local video files or RTSP streams.
+    """Stream camera feed.
     
     Args:
-        camera_id: The ID of the camera
-        format: The streaming format - 'video' for direct streaming, 'hls' for HLS streaming
+        camera_id: Camera ID
+        format: Streaming format - 'video' for direct streaming, 'hls' for HLS streaming
     """
     try:
         # Get camera from database
@@ -226,8 +230,9 @@ async def stream_video(
         if not camera:
             raise HTTPException(status_code=404, detail="Camera not found")
         
+        # Get URL from camera
         url = camera.url
-        logger.info(f"Streaming camera {camera_id} with URL: {url}")
+        logger.info(f"Streaming camera {camera_id} with URL: {url} in format: {format}")
         
         # Handle file:/// URLs - Direct file streaming
         if url.startswith("file:///"):
@@ -284,8 +289,6 @@ async def stream_video(
         
         # Handle HTTP/HTTPS URLs - Proxy the content
         elif url.startswith("http://") or url.startswith("https://"):
-            import httpx
-            
             logger.info(f"Proxying HTTP(S) video content: {url}")
             
             # Determine content type from URL extension
@@ -344,59 +347,95 @@ async def stream_video(
             )
         
         # Handle RTSP URLs (requires ffmpeg to be installed)
-        elif url.startswith("rtsp://") and format == "hls":
-            if not _FFMPEG_AVAILABLE:
-                logger.warning("FFmpeg not available, cannot convert RTSP to HLS")
-                return {
-                    "status": "error", 
-                    "message": "FFmpeg not available on server. HLS conversion not possible.",
-                    "url": url  # Return original URL as fallback
-                }
+        elif url.startswith("rtsp://"):
+            # Check if ffmpeg is available for HLS conversion
+            _FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
+            
+            # If requested format is HLS, try to convert RTSP to HLS
+            if format == "hls":
+                if not _FFMPEG_AVAILABLE:
+                    logger.warning("FFmpeg not available, cannot convert RTSP to HLS")
+                    # If HLS is requested but not available, return an error with a message to try direct mode
+                    return {
+                        "status": "error", 
+                        "message": "FFmpeg not available on server. HLS conversion not possible.",
+                        "url": url,  # Return original URL as fallback
+                        "tryDirectMode": True  # Hint to client to try direct mode
+                    }
+                    
+                # Create a unique session ID for this stream
+                session_id = str(uuid.uuid4())
                 
-            import subprocess
-            import tempfile
-            import uuid
-            from pathlib import Path
+                # Create a temporary directory for this stream
+                temp_dir = Path(tempfile.gettempdir()) / f"rtsp_stream_{session_id}"
+                os.makedirs(temp_dir, exist_ok=True)
+                
+                # HLS playlist file
+                playlist_file = temp_dir / "playlist.m3u8"
+                
+                try:
+                    # Start ffmpeg process to convert RTSP to HLS
+                    # This runs in the background and writes HLS segments to the temp directory
+                    process = subprocess.Popen([
+                        "ffmpeg",
+                        "-i", url,
+                        "-c:v", "copy",  # Copy video stream without re-encoding
+                        "-c:a", "copy",  # Copy audio stream without re-encoding
+                        "-f", "hls",
+                        "-hls_time", "2",  # 2-second segments
+                        "-hls_list_size", "10",  # Keep 10 segments in the playlist
+                        "-hls_flags", "delete_segments",  # Delete old segments
+                        "-hls_segment_filename", f"{temp_dir}/segment_%03d.ts",
+                        "-method", "PUT",
+                        "-loglevel", "warning",  # Reduce log verbosity
+                        str(playlist_file)
+                    ], stderr=subprocess.PIPE)
+                    
+                    # Check if process started successfully
+                    if process.poll() is not None:
+                        error_output = process.stderr.read().decode("utf-8")
+                        logger.error(f"Failed to start HLS conversion: {error_output}")
+                        raise HTTPException(
+                            status_code=500, 
+                            detail=f"Failed to start HLS conversion process: {error_output}"
+                        )
+                    
+                    # Return the playlist file URL
+                    logger.info(f"Started HLS conversion for RTSP stream: {url}")
+                    return {"status": "success", "url": f"/api/cameras/hls/{session_id}/playlist.m3u8"}
+                    
+                except Exception as e:
+                    logger.error(f"Error setting up HLS conversion: {str(e)}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    # If HLS conversion fails, suggest direct streaming as fallback
+                    return {
+                        "status": "error", 
+                        "message": f"Error setting up HLS conversion: {str(e)}",
+                        "tryDirectMode": True
+                    }
             
-            # Create a unique session ID for this stream
-            session_id = str(uuid.uuid4())
-            
-            # Create a temporary directory for this stream
-            temp_dir = Path(tempfile.gettempdir()) / f"rtsp_stream_{session_id}"
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            # HLS playlist file
-            playlist_file = temp_dir / "playlist.m3u8"
-            
-            # Start ffmpeg process to convert RTSP to HLS
-            # This runs in the background and writes HLS segments to the temp directory
-            process = subprocess.Popen([
-                "ffmpeg",
-                "-i", url,
-                "-c:v", "copy",  # Copy video stream without re-encoding
-                "-c:a", "copy",  # Copy audio stream without re-encoding
-                "-f", "hls",
-                "-hls_time", "2",  # 2-second segments
-                "-hls_list_size", "10",  # Keep 10 segments in the playlist
-                "-hls_flags", "delete_segments",  # Delete old segments
-                "-hls_segment_filename", f"{temp_dir}/segment_%03d.ts",
-                "-method", "PUT",
-                str(playlist_file)
-            ], stderr=subprocess.PIPE)
-            
-            # Check if process started successfully
-            if process.poll() is not None:
-                error_output = process.stderr.read().decode("utf-8")
-                logger.error(f"Failed to start HLS conversion: {error_output}")
-                raise HTTPException(
-                    status_code=500, 
-                    detail=f"Failed to start HLS conversion process: {error_output}"
+            # For direct streaming of RTSP (when format=video), proxy through ffmpeg
+            elif format == "video" and _FFMPEG_AVAILABLE:
+                # Stream RTSP directly using FFmpeg to convert to MJPEG
+                return StreamingResponse(
+                    stream_rtsp_mjpeg(url),
+                    media_type="multipart/x-mixed-replace; boundary=frame",
+                    headers={
+                        "Cache-Control": "no-cache, no-store, must-revalidate",
+                        "Connection": "close",
+                        "Pragma": "no-cache",
+                        "Expires": "0"
+                    }
                 )
-            
-            # Return the playlist file
-            logger.info(f"Started HLS conversion for RTSP stream: {url}")
-            return {"status": "HLS conversion started", "url": f"/hls/{session_id}/playlist.m3u8"}
-        
+            else:
+                # For other formats or if ffmpeg is not available, return the original URL
+                # Let the client decide how to handle it
+                return {
+                    "status": "info",
+                    "message": "Direct RTSP streaming requested. RTSP URLs must be handled by the client directly.",
+                    "url": url
+                }
         else:
             # For other URL types we don't recognize, throw an error
             logger.warning(f"Unsupported URL format for streaming: {url}")
@@ -410,58 +449,121 @@ async def stream_video(
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
+# Function to convert RTSP stream to MJPEG for direct browser viewing
+async def stream_rtsp_mjpeg(rtsp_url):
+    """
+    Stream RTSP as Motion JPEG for direct browser viewing.
+    Uses FFmpeg to decode the RTSP stream and converts each frame to JPEG.
+    """
+    import asyncio
+    import shlex
+    
+    cmd = f"ffmpeg -i {shlex.quote(rtsp_url)} -f image2pipe -vcodec mjpeg -q:v 5 -"
+    
+    process = await asyncio.create_subprocess_shell(
+        cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    
+    # Read FFmpeg's output and yield frames
+    try:
+        # Buffer for collecting frame data
+        frame_buffer = bytearray()
+        jpeg_start = b'\xff\xd8'
+        jpeg_end = b'\xff\xd9'
+        
+        # Process FFmpeg output
+        while True:
+            # Read chunk from ffmpeg's stdout
+            chunk = await process.stdout.read(4096)
+            if not chunk:
+                break
+                
+            # Add chunk to our buffer
+            frame_buffer.extend(chunk)
+            
+            # Check if we have a complete JPEG frame
+            start_idx = frame_buffer.find(jpeg_start)
+            if start_idx >= 0:
+                # Look for the end marker after the start marker
+                end_idx = frame_buffer.find(jpeg_end, start_idx)
+                
+                # If we found a complete frame
+                if end_idx >= 0:
+                    # Extract the frame (including end marker)
+                    frame = frame_buffer[start_idx:end_idx+2]
+                    
+                    # Clear buffer up to the end of the frame we just extracted
+                    frame_buffer = frame_buffer[end_idx+2:]
+                    
+                    # Yield the frame in multipart format
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+    
+    finally:
+        # Ensure we clean up the subprocess
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+            
+# Improved HLS streaming endpoint - ensure it's accessible through API
 @router.get("/hls/{session_id}/{file_name}")
 async def serve_hls_stream(session_id: str, file_name: str):
     """Serve HLS streaming files for converted RTSP streams.
     
     Args:
-        session_id: Unique ID for the streaming session
+        session_id: Unique session ID for the HLS stream
         file_name: Name of the HLS file (playlist.m3u8 or segment_xxx.ts)
     """
-    from fastapi.responses import FileResponse
-    import tempfile
-    from pathlib import Path
+    # Global dictionary to track active HLS streams
+    global _active_hls_streams
+    if not hasattr(serve_hls_stream, "_active_hls_streams"):
+        serve_hls_stream._active_hls_streams = {}
     
-    # Find the temp directory for this session
+    # Get the path to the HLS file
     temp_dir = Path(tempfile.gettempdir()) / f"rtsp_stream_{session_id}"
     
-    # Check if directory exists
-    if not os.path.exists(temp_dir):
+    # Check if the directory exists
+    if not temp_dir.exists():
+        logger.error(f"HLS stream directory not found: {temp_dir}")
         raise HTTPException(status_code=404, detail="HLS stream not found")
     
-    # Build the path to the requested file
     file_path = temp_dir / file_name
     
-    # Check if file exists
-    if not os.path.exists(file_path):
+    # Check if the requested file exists
+    if not file_path.exists():
+        logger.error(f"HLS file not found: {file_path}")
         raise HTTPException(status_code=404, detail=f"HLS file not found: {file_name}")
     
-    # Determine content type based on file extension
+    # Update last access time for this stream
+    serve_hls_stream._active_hls_streams[session_id] = time.time()
+    
+    # Clean up old streams
+    current_time = time.time()
+    for sid, last_access in list(serve_hls_stream._active_hls_streams.items()):
+        # If a stream hasn't been accessed in over 5 minutes, clean it up
+        if current_time - last_access > 300:  # 5 minutes
+            stream_dir = Path(tempfile.gettempdir()) / f"rtsp_stream_{sid}"
+            try:
+                # Try to delete the directory and its contents
+                shutil.rmtree(stream_dir, ignore_errors=True)
+                logger.info(f"Cleaned up HLS stream directory for session {sid}")
+            except Exception as e:
+                logger.error(f"Error cleaning up HLS stream directory: {str(e)}")
+            
+            # Remove from tracking dictionary
+            del serve_hls_stream._active_hls_streams[sid]
+    
+    # Determine the content type
     content_type = "application/vnd.apple.mpegurl" if file_name.endswith(".m3u8") else "video/mp2t"
     
-    # Track last access time
-    _active_hls_streams[session_id] = time.time()
-    
-    # Clean up old streams (those not accessed in the last 5 minutes)
-    current_time = time.time()
-    for sid, last_access in list(_active_hls_streams.items()):
-        if current_time - last_access > 300:  # 5 minutes
-            # Clean up the temp directory
-            old_dir = Path(tempfile.gettempdir()) / f"rtsp_stream_{sid}"
-            if os.path.exists(old_dir):
-                import shutil
-                try:
-                    shutil.rmtree(old_dir)
-                    logger.info(f"Cleaned up HLS stream directory for session {sid}")
-                except Exception as e:
-                    logger.error(f"Error cleaning up HLS stream directory: {str(e)}")
-            
-            # Remove from active streams
-            del _active_hls_streams[sid]
-    
-    # Return the file
+    # Read and return the file
     return FileResponse(
-        path=file_path,
+        file_path, 
         media_type=content_type,
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
     )

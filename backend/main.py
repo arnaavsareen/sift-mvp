@@ -88,16 +88,33 @@ async def websocket_camera_stream(websocket: WebSocket, camera_id: int, db: Sess
     MAX_CONSECUTIVE_ERRORS = 5
     last_frame_hash = None  # For tracking frame changes
     
+    # Send initial success message
+    await websocket.send_json({
+        "type": "info",
+        "message": "Connection established"
+    })
+    
     try:
         # Keep the connection open and stream frames
         while True:
+            # Check for client ping messages (added to handle client pings)
+            try:
+                data = await asyncio.wait_for(websocket.receive_json(), timeout=0.01)
+                if data.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+                    continue
+            except asyncio.TimeoutError:
+                # No message received, continue normal operation
+                pass
+            except Exception as e:
+                logger.debug(f"Error checking for client messages: {str(e)}")
+                
             # Get the processor for this camera
             processor = get_processor(camera_id)
             
             if not processor:
                 # If processor isn't running, send an error message
                 try:
-                    logger.warning(f"Camera {camera_id} is not processing")
                     await websocket.send_json({"type": "error", "message": "Camera not processing"})
                 except Exception as e:
                     logger.error(f"Error sending error message for camera {camera_id}: {str(e)}")
@@ -123,21 +140,21 @@ async def websocket_camera_stream(websocket: WebSocket, camera_id: int, db: Sess
                         scale = 800 / width
                         frame = cv2.resize(frame, (int(width * scale), int(height * scale)))
                     
-                    # Compute a simple hash of the frame to check if it's significantly different
-                    # This reduces bandwidth by not sending duplicate frames
-                    import hashlib
-                    small_frame = cv2.resize(frame, (32, 32))  # Tiny version for hashing
-                    frame_hash = hashlib.md5(small_frame.tobytes()).hexdigest()
+                    # Always send frames - removed frame change detection for better streaming
+                    # Adjust quality based on frame size to optimize bandwidth
+                    quality = 80  # Default quality
+                    if width * height > 640 * 480:
+                        quality = 70  # Lower quality for larger frames
+                    if width * height > 1280 * 720:
+                        quality = 60  # Even lower for HD frames
                     
-                    # Encode frame to JPEG with lower quality for faster transmission
-                    success, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                    # Encode frame to JPEG with adaptive quality
+                    success, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
                     
                     if success:
                         # Convert to base64 for sending over WebSocket
                         frame_base64 = base64.b64encode(buffer).decode('utf-8')
                         
-                        # Always send frame regardless of hash
-                        # This helps ensure continuous streaming
                         try:
                             await websocket.send_json({
                                 "type": "frame",
@@ -146,8 +163,6 @@ async def websocket_camera_stream(websocket: WebSocket, camera_id: int, db: Sess
                             })
                             # Reset error counter on success
                             consecutive_errors = 0
-                            # Update last frame hash after successful send
-                            last_frame_hash = frame_hash
                         except WebSocketDisconnect:
                             logger.info(f"WebSocket disconnected while sending frame for camera {camera_id}")
                             break
@@ -178,11 +193,18 @@ async def websocket_camera_stream(websocket: WebSocket, camera_id: int, db: Sess
                     if consecutive_errors <= MAX_CONSECUTIVE_ERRORS:
                         logger.error(f"Error encoding frame for camera {camera_id}: {str(e)}")
             
-            # Shorter delay to increase frame rate (streaming will be more fluid)
-            delay = 0.03  # ~33 FPS - much more fluid video
+            # Adaptive delay based on system performance
+            # Start with a conservative frame rate
+            delay = 0.04  # ~25 FPS by default
+            
+            # If we're encountering errors, slow down
             if consecutive_errors > 0:
                 # Increase delay when experiencing errors
-                delay = min(0.5, 0.03 + consecutive_errors * 0.05)  # Up to 0.5 second
+                delay = min(0.5, 0.04 + consecutive_errors * 0.05)
+            
+            # If we haven't had errors for a while, we can try to speed up slightly
+            elif consecutive_errors == 0 and processor.processing_fps > 15:
+                delay = max(0.03, 0.04 - 0.01)  # Don't go faster than ~33fps
             
             await asyncio.sleep(delay)
             

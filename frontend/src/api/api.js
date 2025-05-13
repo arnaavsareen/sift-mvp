@@ -25,22 +25,31 @@ api.interceptors.request.use(config => {
 // WebSocket connection utilities
 export const websocketApi = {
   // Create a camera stream connection
-  createCameraStream: (cameraId, onFrame, onAlert, onError, onClose) => {
+  createCameraStream: (cameraId, onFrame, onAlert, onError, onClose, options = {}) => {
     const createWebSocket = () => {
       // Create a new WebSocket connection
-      console.log(`Connecting to WebSocket at: ${WS_URL}/cameras/${cameraId}/stream`);
-      const ws = new WebSocket(`${WS_URL}/cameras/${cameraId}/stream`);
+      console.log(`Connecting to WebSocket at: ${WS_URL}/ws/cameras/${cameraId}/stream`);
+      const ws = new WebSocket(`${WS_URL}/ws/cameras/${cameraId}/stream`);
       
       // Connection status
       let wasConnected = false;
       let reconnectAttempts = 0;
-      const maxReconnectAttempts = 10;
-      const baseReconnectDelay = 1000; // Start with 1 second
+      const maxReconnectAttempts = options.maxReconnectAttempts || 10;
+      const baseReconnectDelay = options.reconnectInterval || 1000; // Start with 1 second
+      const debug = options.debug || false;
       
       ws.onopen = () => {
         console.log(`WebSocket connection opened for camera ${cameraId}`);
         wasConnected = true;
         reconnectAttempts = 0; // Reset reconnect counter on successful connection
+        
+        // Send a ping immediately to verify the connection is working
+        try {
+          ws.send(JSON.stringify({ type: 'ping' }));
+          if (debug) console.log("Sent initial ping");
+        } catch (e) {
+          console.error("Error sending initial ping:", e);
+        }
       };
       
       ws.onmessage = (event) => {
@@ -49,11 +58,11 @@ export const websocketApi = {
           
           if (data.type === 'ping') {
             // Just a ping to keep connection alive, no action needed
-            console.log("Ping received");
+            if (debug) console.log("Ping received");
             return;
           } else if (data.type === 'frame' && typeof onFrame === 'function') {
             // Debug log for frame data
-            console.log(`Frame received, size: ${data.frame ? data.frame.length : 0} chars`);
+            if (debug) console.log(`Frame received, size: ${data.frame ? data.frame.length : 0} chars`);
             onFrame(data.frame, data.timestamp);
           } else if (data.type === 'alert' && typeof onAlert === 'function') {
             console.log("Alert received:", data.data);
@@ -71,6 +80,18 @@ export const websocketApi = {
         }
       };
       
+      // Set up ping interval to keep connection alive
+      const pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({ type: 'ping' }));
+            if (debug) console.log("Sent ping");
+          } catch (e) {
+            console.error("Error sending ping:", e);
+          }
+        }
+      }, 30000); // Send ping every 30 seconds
+      
       ws.onerror = (error) => {
         console.error('WebSocket error:', error);
         if (typeof onError === 'function') {
@@ -80,6 +101,9 @@ export const websocketApi = {
       
       ws.onclose = (event) => {
         console.log(`WebSocket connection closed for camera ${cameraId}:`, event.code, event.reason);
+        
+        // Clear ping interval
+        clearInterval(pingInterval);
         
         if (typeof onClose === 'function') {
           onClose(event);

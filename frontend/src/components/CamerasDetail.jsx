@@ -17,6 +17,7 @@ const CameraDetail = () => {
   const navigate = useNavigate();
   const videoRef = useRef(null);
   const wsRef = useRef(null);
+  const hlsRef = useRef(null);
   
   const [camera, setCamera] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -25,7 +26,8 @@ const CameraDetail = () => {
   const [error, setError] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [wsError, setWsError] = useState(null);
-  const [isVideoMode, setIsVideoMode] = useState(false);
+  const [isVideoMode, setIsVideoMode] = useState(true);
+  const [streamType, setStreamType] = useState('websocket'); // Default to WebSocket
   
   // Form state
   const [formData, setFormData] = useState({
@@ -51,6 +53,18 @@ const CameraDetail = () => {
                          data.url.endsWith('.webm');
       
       setIsVideoMode(isVideoUrl);
+      
+      // Determine best streaming method based on URL type
+      if (data.url.startsWith('rtsp://')) {
+        // For RTSP streams, use WebSocket as first choice instead of HLS
+        setStreamType('websocket');
+      } else if (isVideoUrl) {
+        // For other video URLs, try direct video playback
+        setStreamType('video');
+      } else {
+        // Default to WebSocket for other URLs
+        setStreamType('websocket');
+      }
       
       // Initialize form data
       setFormData({
@@ -109,38 +123,65 @@ const CameraDetail = () => {
     loadCamera();
   }, [id]);
   
+  // Clean up all streaming connections when component unmounts
+  useEffect(() => {
+    return () => {
+      // Clean up video element
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.src = "";
+        videoRef.current.load();
+      }
+      
+      // Clean up HLS
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+      
+      // Clean up WebSocket
+      if (wsRef.current) {
+        wsRef.current.closedManually = true;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, []);
+  
   // Handle direct video playback
   useEffect(() => {
     if (!isProcessing || !isVideoMode || !camera || !videoRef.current) return;
+    if (streamType !== 'video') return;
+    
+    let playAttempts = 0;
+    const maxPlayAttempts = 3;
     
     const handlePlayError = (err) => {
       console.error("Error playing video:", err);
-      setWsError("Failed to play video. Trying alternative methods...");
       
-      // Try falling back to WebSocket mode if direct playback fails after multiple attempts
-      if (playAttempts > 2) {
-        console.log("Too many failed play attempts, switching to WebSocket mode");
-        setIsVideoMode(false);
+      playAttempts++;
+      if (playAttempts >= maxPlayAttempts) {
+        console.log(`Failed after ${playAttempts} attempts. Trying HLS mode...`);
+        setWsError("Failed to play video. Switching to HLS streaming...");
+        setStreamType('hls');
+      } else {
+        setWsError(`Failed to play video. Retry attempt ${playAttempts}/${maxPlayAttempts}...`);
+        
+        // Try again with a delay and a fresh URL
+        setTimeout(loadVideo, 1000);
       }
     };
     
-    let playAttempts = 0;
-    
-    // Always use our streaming endpoint for all URL types
-    // This ensures consistent handling and proxying through our backend
-    const streamingUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/cameras/${id}/stream?format=video&t=${new Date().getTime()}`;
-    console.log("Setting video source to streaming URL:", streamingUrl);
-    
     const loadVideo = () => {
-      playAttempts++;
-      console.log(`Play attempt ${playAttempts}`);
+      // Always use our streaming endpoint for all URL types
+      const streamingUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/cameras/${id}/stream?format=video&t=${new Date().getTime()}&retry=${playAttempts}`;
+      console.log("Setting video source to streaming URL:", streamingUrl);
       
       // Set a timeout to detect if video loading takes too long
       const timeoutId = setTimeout(() => {
         if (videoRef.current && videoRef.current.readyState === 0) {
           console.warn("Video loading timed out");
-          setWsError("Video loading timed out. Falling back to WebSocket mode...");
-          setIsVideoMode(false);
+          handlePlayError(new Error("Video loading timed out"));
         }
       }, 10000); // 10 second timeout
       
@@ -148,6 +189,13 @@ const CameraDetail = () => {
       videoRef.current.onloadedmetadata = () => {
         console.log("Video metadata loaded successfully");
         clearTimeout(timeoutId);
+        setWsError(null);
+      };
+      
+      videoRef.current.onplaying = () => {
+        console.log("Video is playing successfully");
+        setWsError(null);
+        playAttempts = 0; // Reset attempts when playing successfully
       };
       
       videoRef.current.onerror = (e) => {
@@ -157,23 +205,9 @@ const CameraDetail = () => {
         // Get detailed error information
         const errorCode = videoRef.current.error ? videoRef.current.error.code : 0;
         const errorMessage = videoRef.current.error ? videoRef.current.error.message : "Unknown error";
-        setWsError(`Video error (${errorCode}): ${errorMessage}`);
+        console.error(`Video error (${errorCode}): ${errorMessage}`);
         
-        if (playAttempts <= 2) {
-          // Add a timestamp to prevent caching issues
-          const retryUrl = `${streamingUrl}&retry=${playAttempts}`;
-          console.log("Error in video playback, retrying with:", retryUrl);
-          
-          // Small delay to prevent rapid retries
-          setTimeout(() => {
-            videoRef.current.src = retryUrl;
-            videoRef.current.load();
-            videoRef.current.play().catch(handlePlayError);
-          }, 1000);
-        } else {
-          // If we've tried multiple times, switch to WebSocket mode
-          setIsVideoMode(false);
-        }
+        handlePlayError(new Error(`Video error (${errorCode}): ${errorMessage}`));
       };
       
       // Set the video source and attempt to play
@@ -187,31 +221,116 @@ const CameraDetail = () => {
     
     return () => {
       if (videoRef.current) {
-        // Stop any media playing
+        clearTimeout(videoRef.current.timeoutId);
         videoRef.current.onloadedmetadata = null;
+        videoRef.current.onplaying = null;
         videoRef.current.onerror = null;
         videoRef.current.pause();
         videoRef.current.src = "";
-        
-        // Clean up HLS.js if it was used
-        const hlsInstance = videoRef.current.hlsInstance;
-        if (hlsInstance) {
-          hlsInstance.destroy();
-          delete videoRef.current.hlsInstance;
-        }
+        videoRef.current.load();
       }
     };
-  }, [isProcessing, isVideoMode, camera, id]);
+  }, [isProcessing, isVideoMode, camera, id, streamType]);
   
-  // For cameras that don't support direct video streaming, use WebSocket
+  // Handle HLS streaming
   useEffect(() => {
-    if (!isProcessing || isVideoMode) {
+    if (!isProcessing || !isVideoMode || !camera || !videoRef.current) return;
+    if (streamType !== 'hls') return;
+    
+    const setupHls = () => {
+      // Clean up existing HLS instance if any
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+      }
+      
+      // Check if HLS.js is supported in this browser
+      if (!Hls.isSupported()) {
+        console.error("HLS.js is not supported in this browser");
+        setWsError("HLS streaming not supported in this browser. Falling back to WebSocket mode.");
+        setStreamType('websocket');
+        return;
+      }
+      
+      const hlsUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/cameras/${id}/stream?format=hls&t=${new Date().getTime()}`;
+      console.log("Setting up HLS stream with URL:", hlsUrl);
+      
+      try {
+        // Create a new HLS instance
+        const hls = new Hls({
+          debug: false,
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 30
+        });
+        
+        // Handle HLS events
+        hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+          console.log("HLS: Media attached");
+          setWsError("Starting HLS stream...");
+        });
+        
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          console.log("HLS: Manifest parsed, playback starting");
+          setWsError(null);
+          videoRef.current.play().catch(err => {
+            console.error("Failed to auto-play HLS stream:", err);
+          });
+        });
+        
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          console.error("HLS error:", data);
+          if (data.fatal) {
+            switch(data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                setWsError("HLS network error. Retrying...");
+                hls.startLoad();
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                setWsError("HLS media error. Recovering...");
+                hls.recoverMediaError();
+                break;
+              default:
+                setWsError("Fatal HLS error. Falling back to WebSocket mode.");
+                setStreamType('websocket');
+                break;
+            }
+          }
+        });
+        
+        // Bind HLS to the video element
+        hls.loadSource(hlsUrl);
+        hls.attachMedia(videoRef.current);
+        hlsRef.current = hls;
+        
+        // Request first few frames
+        hls.startLoad();
+      } catch (error) {
+        console.error("Failed to setup HLS:", error);
+        setWsError("Failed to setup HLS streaming. Falling back to WebSocket mode.");
+        setStreamType('websocket');
+      }
+    };
+    
+    // Start HLS streaming
+    setupHls();
+    
+    return () => {
+      // Clean up HLS
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, [isProcessing, isVideoMode, camera, id, streamType]);
+  
+  // Update WebSocket handling to be more robust
+  useEffect(() => {
+    if (!isProcessing || (isVideoMode && streamType !== 'websocket')) {
       // Clean up any existing connection
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
       }
-      setWsError(null);
       return;
     }
     
@@ -219,47 +338,77 @@ const CameraDetail = () => {
     const frameImg = document.getElementById('frame-img');
     const errorMessage = document.getElementById('camera-error-message');
     
-    // Initialize WebSocket for real-time frame streaming
-    wsRef.current = websocketApi.createCameraStream(
-      id,
-      // onFrame handler
-      (frameData, timestamp) => {
-        if (!frameImg || !frameData) return;
-        
-        // Hide error message if it's visible
-        if (errorMessage && !errorMessage.classList.contains('hidden')) {
-          errorMessage.classList.add('hidden');
-        }
-        
-        // Show the frame image if it's hidden
-        if (frameImg.classList.contains('hidden')) {
-          frameImg.classList.remove('hidden');
-        }
-        
-        // Set the image source to the received frame
-        frameImg.src = `data:image/jpeg;base64,${frameData}`;
-        
-        // Reset error state
-        setWsError(null);
-      },
-      // onAlert handler (not used here, alerts handled separately)
-      null,
-      // onError handler
-      (errorMsg) => {
-        console.error(`WebSocket error for camera ${id}:`, errorMsg);
-        setWsError(errorMsg);
-        
-        // Show error message if error persists
-        if (errorMsg.includes('Failed to reconnect') && errorMessage) {
-          frameImg.classList.add('hidden');
-          errorMessage.classList.remove('hidden');
-        }
-      },
-      // onClose handler
-      (event) => {
-        console.log(`WebSocket closed for camera ${id}:`, event);
+    if (frameImg) {
+      console.log("Setting up WebSocket streaming mode");
+      setWsError("Connecting via WebSocket for frame-by-frame streaming...");
+      
+      // Force loading indicator to show until first frame arrives
+      frameImg.src = '';
+      
+      // Show loading indicator
+      const loadingIndicator = document.getElementById('loading-indicator');
+      if (loadingIndicator) {
+        loadingIndicator.classList.remove('hidden');
       }
-    );
+      
+      if (errorMessage) {
+        errorMessage.classList.add('hidden');
+      }
+      
+      // Initialize WebSocket for real-time frame streaming with enhanced options
+      wsRef.current = websocketApi.createCameraStream(
+        id,
+        // onFrame handler
+        (frameData, timestamp) => {
+          if (!frameImg || !frameData) return;
+          
+          // Hide the loading indicator when frames start arriving
+          const loadingIndicator = document.getElementById('loading-indicator');
+          if (loadingIndicator) {
+            loadingIndicator.classList.add('hidden');
+          }
+          
+          // Hide error message if it's visible
+          if (errorMessage) {
+            errorMessage.classList.add('hidden');
+          }
+          
+          // Show the frame image if it's hidden
+          if (frameImg.classList.contains('hidden')) {
+            frameImg.classList.remove('hidden');
+          }
+          
+          // Set the image source to the received frame
+          frameImg.src = `data:image/jpeg;base64,${frameData}`;
+          
+          // Reset error state
+          setWsError(null);
+        },
+        // onAlert handler (not used here, alerts handled separately)
+        null,
+        // onError handler
+        (errorMsg) => {
+          console.error(`WebSocket error for camera ${id}:`, errorMsg);
+          setWsError(`WebSocket error: ${errorMsg}. Attempting to reconnect...`);
+          
+          // Show error message if error persists
+          if (errorMsg.includes('Failed to reconnect') && errorMessage) {
+            frameImg.classList.add('hidden');
+            errorMessage.classList.remove('hidden');
+          }
+        },
+        // onClose handler
+        (event) => {
+          console.log(`WebSocket closed for camera ${id}:`, event);
+        },
+        // Enhanced options
+        {
+          maxReconnectAttempts: 10,  // Increase from default of 5
+          reconnectInterval: 2000,   // 2 seconds between reconnect attempts
+          debug: true                // Enable detailed logging
+        }
+      );
+    }
     
     // Cleanup function to close WebSocket when component unmounts or deps change
     return () => {
@@ -270,7 +419,7 @@ const CameraDetail = () => {
         wsRef.current = null;
       }
     };
-  }, [id, isProcessing, isVideoMode]);
+  }, [id, isProcessing, isVideoMode, streamType]);
   
   // Handle form input changes
   const handleInputChange = (e) => {
@@ -330,6 +479,21 @@ const CameraDetail = () => {
     }
   };
   
+  // Retry streaming with different method
+  const retryStream = () => {
+    // Try each streaming method in sequence
+    if (streamType === 'video') {
+      setStreamType('hls');
+    } else if (streamType === 'hls') {
+      setStreamType('websocket');
+    } else {
+      // If we're already on websocket, restart with direct video again
+      setStreamType('video');
+    }
+    
+    setWsError(`Trying ${streamType} streaming mode...`);
+  };
+  
   // Render the camera view based on type
   const renderCameraView = () => {
     if (!isProcessing) {
@@ -351,11 +515,11 @@ const CameraDetail = () => {
         </div>
       );
     }
-    
+
     return (
       <>
-        {isVideoMode ? (
-          // For direct video feeds, use the HTML5 video element
+        {isVideoMode && (streamType === 'video' || streamType === 'hls') ? (
+          // For direct video or HLS feeds, use the HTML5 video element
           <video
             ref={videoRef}
             className="w-full h-full object-contain bg-black"
@@ -365,18 +529,30 @@ const CameraDetail = () => {
             controls={false}
           />
         ) : (
-          // For non-video feeds, continue using image-based approach
-          <img
-            id="frame-img"
-            src={`${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/dashboard/cameras/${id}/latest-frame?format=jpeg&t=${new Date().getTime()}`}
-            alt="Camera feed"
-            className="w-full h-full object-contain bg-black"
-            onError={(e) => {
-              e.target.src = '';
-              e.target.className = 'hidden';
-              document.getElementById('camera-error-message').classList.remove('hidden');
-            }}
-          />
+          // For WebSocket streaming, use image-based approach
+          <div className="relative w-full h-full">
+            <img
+              id="frame-img"
+              alt="Camera feed"
+              className="w-full h-full object-contain bg-black"
+              onError={(e) => {
+                console.log("Image error occurred");
+                e.target.classList.add('hidden');
+                document.getElementById('camera-error-message')?.classList.remove('hidden');
+              }}
+              style={{
+                display: 'block', /* Always show unless explicitly hidden */
+                maxHeight: '100%',
+                maxWidth: '100%'
+              }}
+            />
+            <div 
+              id="loading-indicator" 
+              className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-50 z-10 hidden"
+            >
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
+            </div>
+          </div>
         )}
         
         {/* Overlay with camera information */}
@@ -392,6 +568,13 @@ const CameraDetail = () => {
           )}
         </div>
         
+        {/* Stream type indicator */}
+        <div className="absolute top-0 right-0 p-3">
+          <div className="bg-black bg-opacity-50 text-white px-2 py-1 rounded text-xs">
+            {streamType.toUpperCase()} MODE
+          </div>
+        </div>
+        
         {/* Timestamp */}
         <div className="absolute bottom-3 right-3 bg-black bg-opacity-50 px-2 py-1 rounded text-xs text-white">
           {new Date().toLocaleTimeString()}
@@ -402,26 +585,14 @@ const CameraDetail = () => {
           <FaExclamationTriangle className="h-16 w-16 text-yellow-500 mb-4" />
           <p className="text-xl font-medium text-center mb-2">Connection Error</p>
           <p className="text-gray-400 max-w-md text-center mb-6">
-            Unable to load camera feed. 
-            The camera might be offline or the stream URL is invalid.
+            {wsError || "Unable to load camera feed. The camera might be offline or the stream URL is invalid."}
           </p>
           <div className="flex space-x-4">
             <button
-              onClick={() => {
-                if (videoRef.current) {
-                  videoRef.current.load();
-                } else {
-                  const frameImg = document.getElementById('frame-img');
-                  if (frameImg) {
-                    frameImg.src = `${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/dashboard/cameras/${id}/latest-frame?format=jpeg&t=${new Date().getTime()}`;
-                    frameImg.classList.remove('hidden');
-                  }
-                  document.getElementById('camera-error-message').classList.add('hidden');
-                }
-              }}
+              onClick={retryStream}
               className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center space-x-2"
             >
-              <span>Retry Connection</span>
+              <span>Try Different Method</span>
             </button>
             <button
               onClick={stopCamera}

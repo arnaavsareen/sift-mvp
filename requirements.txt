@@ -2,9 +2,10 @@ fastapi==0.95.0
 uvicorn==0.22.0
 pydantic==1.10.7
 opencv-python-headless==4.7.0.72
-# Updated to use latest ultralytics
-ultralytics>=8.0.120
+# Updated to use compatible ultralytics for YOLO support
+ultralytics>=8.0.0
 torch>=2.0.0
+torchvision>=0.15.0
 sqlalchemy==2.0.9
 python-multipart==0.0.6
 python-jose==3.3.0
@@ -19,6 +20,7 @@ shapely==2.0.1
 # For enhanced notification capabilities
 twilio==7.16.0  # For SMS notifications
 requests==2.28.2  # For webhook and Slack notifications
+httpx==0.24.1  # For async HTTP client support
 
 # For monitoring and performance tracking
 psutil==5.9.5
@@ -28,3 +30,21 @@ gdown==4.7.1  # For downloading models from Google Drive
 
 # WebSocket support for real-time streaming
 websockets==11.0.3
+
+# For improved image processing and computer vision
+scipy==1.11.3
+
+# For better performance monitoring
+matplotlib==3.7.2
+
+# For optimized tensor operations - adjusted for compatibility
+onnx>=1.13.0,<1.14.0  # Compatible ONNX version for Python 3.9
+onnxruntime>=1.13.0  # Base ONNX runtime without GPU dependency
+
+# Video stream handling
+ffmpeg-python
+av
+
+# YOLOv8 specific dependencies (instead of YOLOv11)
+# lap==0.4.0  # For tracking - removed due to build issues
+supervision>=0.18.0  # For visualization and analysis
