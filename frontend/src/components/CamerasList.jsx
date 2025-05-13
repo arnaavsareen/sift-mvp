@@ -8,7 +8,8 @@ import {
   FaStop, 
   FaEdit, 
   FaTrash,
-  FaExclamationTriangle 
+  FaExclamationTriangle,
+  FaEye
 } from 'react-icons/fa';
 
 const CamerasList = () => {
@@ -139,10 +140,16 @@ const CamerasList = () => {
     
     try {
       await camerasApi.delete(id);
+      // Show success message
+      alert('Camera deleted successfully');
       fetchCameras(); // Refresh the list
     } catch (err) {
       console.error(`Error deleting camera ${id}:`, err);
-      alert('Failed to delete camera. Please try again.');
+      // Show more specific error message based on the error
+      const errorMessage = err.response?.status === 404
+        ? 'Camera not found. It may have been already deleted.'
+        : 'Failed to delete camera. Please try again.';
+      alert(errorMessage);
     }
   };
   
@@ -179,10 +186,10 @@ const CamerasList = () => {
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Cameras</h1>
         <button
-          className="btn-primary"
+          className="btn-primary inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
           onClick={() => setShowAddModal(true)}
         >
-          <FaPlus className="mr-2" />
+          <FaPlus className="mr-2 -ml-1 h-4 w-4" />
           Add Camera
         </button>
       </div>
@@ -195,10 +202,10 @@ const CamerasList = () => {
             <h2 className="text-xl font-medium text-gray-900 mb-2">No cameras found</h2>
             <p className="text-gray-500 mb-4">Add a camera to start monitoring for safety compliance</p>
             <button
-              className="btn-primary"
+              className="btn-primary inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
               onClick={() => setShowAddModal(true)}
             >
-              <FaPlus className="mr-2" />
+              <FaPlus className="mr-2 -ml-1 h-4 w-4" />
               Add Camera
             </button>
           </div>
@@ -226,7 +233,7 @@ const CamerasList = () => {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {cameras.map((camera) => (
-                  <tr key={camera.id}>
+                  <tr key={camera.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
                         <div className="flex-shrink-0 h-10 w-10 flex items-center justify-center bg-primary-100 rounded-full">
@@ -254,12 +261,12 @@ const CamerasList = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span
-                        className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                        className={`px-3 py-1.5 inline-flex items-center justify-center text-xs font-medium rounded-full shadow-sm ${
                           !camera.is_active
                             ? 'bg-gray-100 text-gray-800'
                             : processingStatus[camera.id]
-                            ? 'bg-success-100 text-success-800'
-                            : 'bg-warning-100 text-warning-800'
+                            ? 'bg-green-100 text-green-800 ring-1 ring-green-600/20'
+                            : 'bg-amber-100 text-amber-800 ring-1 ring-amber-600/20'
                         }`}
                       >
                         {!camera.is_active
@@ -273,8 +280,9 @@ const CamerasList = () => {
                       <div className="flex justify-end space-x-2">
                         <Link
                           to={`/cameras/${camera.id}`}
-                          className="text-primary-600 hover:text-primary-900 px-2 py-1"
+                          className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
                         >
+                          <FaEye className="mr-1.5 h-3.5 w-3.5" />
                           View
                         </Link>
                         
@@ -282,17 +290,17 @@ const CamerasList = () => {
                           processingStatus[camera.id] ? (
                             <button
                               onClick={() => stopCamera(camera.id)}
-                              className="text-danger-600 hover:text-danger-900 px-2 py-1"
+                              className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
                             >
-                              <FaStop className="inline mr-1" />
+                              <FaStop className="mr-1.5 h-3.5 w-3.5" />
                               Stop
                             </button>
                           ) : (
                             <button
                               onClick={() => startCamera(camera.id)}
-                              className="text-success-600 hover:text-success-900 px-2 py-1"
+                              className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
                             >
-                              <FaPlay className="inline mr-1" />
+                              <FaPlay className="mr-1.5 h-3.5 w-3.5" />
                               Start
                             </button>
                           )
@@ -300,9 +308,9 @@ const CamerasList = () => {
                         
                         <button
                           onClick={() => deleteCamera(camera.id)}
-                          className="text-danger-600 hover:text-danger-900 px-2 py-1"
+                          className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
                         >
-                          <FaTrash className="inline mr-1" />
+                          <FaTrash className="mr-1.5 h-3.5 w-3.5" />
                           Delete
                         </button>
                       </div>

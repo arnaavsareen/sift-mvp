@@ -380,10 +380,18 @@ const Dashboard = () => {
           </div>
           <div className="mt-4">
             <div className="flex items-center text-sm">
-              <span className="text-gray-600">Active:</span>
-              <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-50 text-yellow-700">
-                {overview?.alerts?.active || 0} alerts
-              </span>
+              <span className="text-gray-600">Status:</span>
+              {overview?.alerts?.active > 0 ? (
+                <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 flex items-center">
+                  <span className="w-2 h-2 bg-red-500 rounded-full mr-1.5 animate-pulse"></span>
+                  {overview?.alerts?.active} Active
+                </span>
+              ) : (
+                <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700 flex items-center">
+                  <span className="w-2 h-2 bg-green-500 rounded-full mr-1.5"></span>
+                  All Clear
+                </span>
+              )}
             </div>
           </div>
         </section>

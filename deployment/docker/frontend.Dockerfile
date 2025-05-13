@@ -8,6 +8,9 @@ COPY frontend/package.json frontend/package-lock.json* ./
 # Install dependencies
 RUN npm install
 
+# Install HLS.js for video streaming
+RUN npm install hls.js
+
 # Copy source code
 COPY frontend/ ./
 

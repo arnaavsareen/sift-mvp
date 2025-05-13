@@ -133,6 +133,12 @@ class VideoProcessor:
         # Session ID for logging & tracking
         self.session_id = str(uuid.uuid4())[:8]
         
+        # Violation tracking - store personID -> last violation time
+        # Using bounding box coordinates as a simple person ID
+        self.violation_history = {}
+        # Timeout for repeated violations (10 minutes = 600 seconds)
+        self.violation_timeout = 600
+        
         logger.info(f"Initialized video processor for camera {camera_id} (session: {self.session_id})")
     
     def start(self) -> bool:
@@ -248,8 +254,8 @@ class VideoProcessor:
     
     def _capture_frames(self) -> None:
         """
-        Background thread to continuously capture frames from the video source.
-        Handles connection issues and maintains frame capture state.
+        Background thread to capture frames from the camera stream.
+        Handles reconnection and error recovery.
         """
         cap = None
         last_frame_time = time.time()
@@ -257,13 +263,11 @@ class VideoProcessor:
         
         try:
             while self.is_running:
-                # (Re)open capture if needed
-                if cap is None or not cap.isOpened():
+                # Check if we need to open or reopen the capture
+                if cap is None or (hasattr(cap, 'isOpened') and not cap.isOpened()):
+                    # If we've reached max reconnect attempts, stop trying
                     if self.reconnect_attempts >= self.max_reconnect_attempts:
-                        logger.error(
-                            f"Failed to connect to camera {self.camera_id} after "
-                            f"{self.reconnect_attempts} attempts. Stopping processor."
-                        )
+                        logger.error(f"Max reconnect attempts ({self.max_reconnect_attempts}) reached for camera {self.camera_id}. Stopping processing.")
                         self.is_running = False
                         break
                     
@@ -272,14 +276,50 @@ class VideoProcessor:
                         if cap is not None:
                             cap.release()  # Release any existing capture
                         
-                        logger.info(f"Connecting to camera {self.camera_id} (attempt {self.reconnect_attempts + 1})")
-                        cap = cv2.VideoCapture(self.camera_url)
+                        # Handle file:/// URLs properly
+                        camera_url = self.camera_url
+                        if camera_url.startswith("file:///"):
+                            # Convert file:/// URL to proper path
+                            # Strip file:/// prefix and convert to absolute path
+                            file_path = camera_url.replace("file:///", "/")
+                            logger.info(f"Opening local video file: {file_path}")
+                            camera_url = file_path
                         
-                        # Set capture properties if possible
-                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffer for realtime
+                        logger.info(f"Connecting to camera {self.camera_id} (attempt {self.reconnect_attempts + 1})")
+                        
+                        # Configure OpenCV capture based on stream type
+                        if camera_url.startswith("rtsp://"):
+                            # For RTSP streams, use TCP transport for more reliable streaming
+                            # and configure buffer size and other RTSP-specific settings
+                            logger.info(f"Configuring RTSP stream: {camera_url}")
+                            
+                            # Use TCP instead of UDP for RTSP
+                            cap = cv2.VideoCapture(camera_url, cv2.CAP_FFMPEG)
+                            
+                            # Set RTSP transport to TCP
+                            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'H264'))
+                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Small buffer for realtime
+                            
+                            # Key RTSP configuration options for better performance
+                            # These settings significantly improve RTSP stream reliability
+                            cap.set(cv2.CAP_PROP_RTSP_TRANSPORT, cv2.CAP_RTSP_TRANSPORT_TCP)
+                            
+                            # Skip frames if we can't keep up (lower latency)
+                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)  # Request reasonable resolution
+                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                            
+                            # Set lower receive timeout for faster failure detection
+                            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 3000)  # 3-second timeout
+                            cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3000)
+                        else:
+                            # For non-RTSP sources, use standard configuration
+                            cap = cv2.VideoCapture(camera_url)
+                            
+                            # Set capture properties if possible
+                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffer for realtime
                         
                         if not cap.isOpened():
-                            logger.warning(f"Could not open video stream at {self.camera_url}")
+                            logger.warning(f"Could not open video stream at {camera_url}")
                             self.reconnect_attempts += 1
                             time.sleep(self.reconnect_delay)
                             continue
@@ -664,6 +704,20 @@ class VideoProcessor:
                 confidence = violation.get("confidence", 0.0)
                 bbox = violation.get("bbox")
                 
+                # Skip this violation if we've already alerted about this person recently
+                if bbox:
+                    # Create a simple "person ID" from the bounding box coordinates
+                    # We round to nearest 10 pixels to allow for slight movement
+                    person_id = f"{int(bbox[0]/10)},{int(bbox[1]/10)},{int(bbox[2]/10)},{int(bbox[3]/10)}"
+                    
+                    # Check if we've seen this person recently
+                    if person_id in self.violation_history:
+                        last_violation_time = self.violation_history[person_id]
+                        # If violation was detected within timeout period, skip this alert
+                        if (current_time - last_violation_time) < self.violation_timeout:
+                            logger.info(f"Skipping repeated violation for same person within 10 minutes: {violation_type}")
+                            continue
+                
                 # Additional metadata to include with the alert
                 metadata = {
                     "session_id": self.session_id,
@@ -686,6 +740,18 @@ class VideoProcessor:
                     self.last_alert_time = current_time
                     self.alert_count += 1
                     logger.info(f"Generated alert for camera {self.camera_id}: {violation_type} ({confidence:.2f})")
+                    
+                    # Update violation history for this person
+                    if bbox:
+                        person_id = f"{int(bbox[0]/10)},{int(bbox[1]/10)},{int(bbox[2]/10)},{int(bbox[3]/10)}"
+                        self.violation_history[person_id] = current_time
+                        
+                        # Clean up old entries in violation history 
+                        # (we can do this occasionally to prevent memory growth)
+                        if self.alert_count % 10 == 0:
+                            for p_id in list(self.violation_history.keys()):
+                                if (current_time - self.violation_history[p_id]) > self.violation_timeout:
+                                    del self.violation_history[p_id]
                     
                     # Only create one alert at a time to prevent alert flooding
                     break

@@ -59,6 +59,8 @@ services:
       - ./data:/app/data
       # Make sure the model is mounted correctly
       - ./data/models/yolo11m.pt:/app/data/models/yolo11m.pt
+      # Volume for HLS streaming temp files
+      - hls_temp:/tmp/rtsp_stream
     env_file:
       - .env
     environment:
@@ -122,3 +124,4 @@ services:
 
 volumes:
   postgres_data:
+  hls_temp:

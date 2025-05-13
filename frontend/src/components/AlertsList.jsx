@@ -45,48 +45,49 @@ const AlertsList = () => {
     fetchCameras();
   }, []);
   
+  // Function to fetch alerts and stats
+  const fetchAlerts = async () => {
+    try {
+      setLoading(true);
+      
+      // Apply filters to API request
+      const params = {
+        skip: (page - 1) * itemsPerPage,
+        limit: itemsPerPage,
+        ...filters
+      };
+      
+      // Fetch alerts
+      const alertsData = await alertsApi.getAll(params);
+      
+      // Check if there are more alerts
+      setHasMore(alertsData.length === itemsPerPage);
+      
+      // Update alerts (append if loading more, replace if filtering)
+      if (page === 1) {
+        setAlerts(alertsData);
+      } else {
+        setAlerts(prev => [...prev, ...alertsData]);
+      }
+      
+      // Fetch stats
+      const statsData = await alertsApi.getStats({
+        hours: filters.hours,
+        camera_id: filters.camera_id || undefined
+      });
+      setStats(statsData);
+      
+      setLoading(false);
+      setError(null);
+    } catch (err) {
+      console.error('Error fetching alerts:', err);
+      setError('Failed to load alerts. Please try again later.');
+      setLoading(false);
+    }
+  };
+  
   // Load alerts and stats
   useEffect(() => {
-    const fetchAlerts = async () => {
-      try {
-        setLoading(true);
-        
-        // Apply filters to API request
-        const params = {
-          skip: (page - 1) * itemsPerPage,
-          limit: itemsPerPage,
-          ...filters
-        };
-        
-        // Fetch alerts
-        const alertsData = await alertsApi.getAll(params);
-        
-        // Check if there are more alerts
-        setHasMore(alertsData.length === itemsPerPage);
-        
-        // Update alerts (append if loading more, replace if filtering)
-        if (page === 1) {
-          setAlerts(alertsData);
-        } else {
-          setAlerts(prev => [...prev, ...alertsData]);
-        }
-        
-        // Fetch stats
-        const statsData = await alertsApi.getStats({
-          hours: filters.hours,
-          camera_id: filters.camera_id || undefined
-        });
-        setStats(statsData);
-        
-        setLoading(false);
-        setError(null);
-      } catch (err) {
-        console.error('Error fetching alerts:', err);
-        setError('Failed to load alerts. Please try again later.');
-        setLoading(false);
-      }
-    };
-    
     fetchAlerts();
   }, [filters, page]);
   
@@ -148,6 +149,11 @@ const AlertsList = () => {
     return camera ? camera.name : `Camera ${cameraId}`;
   };
   
+  // Handle retry
+  const handleRetry = () => {
+    fetchAlerts();
+  };
+  
   if (loading && page === 1 && alerts.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -167,7 +173,7 @@ const AlertsList = () => {
         <p>{error}</p>
         <button
           className="mt-4 btn-primary"
-          onClick={() => setFilters({ ...filters })} // Trigger re-fetch
+          onClick={handleRetry}
         >
           Retry
         </button>
@@ -176,31 +182,40 @@ const AlertsList = () => {
   }
   
   return (
-    <div>
-      {/* Header */}
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Alerts</h1>
-      </div>
-      
-      {/* Filter section */}
+    <div className="p-4 md:p-6">
+      {/* Filters */}
       <div className="bg-white shadow rounded-lg p-4 mb-6">
-        <div className="flex items-center mb-4">
-          <FaFilter className="text-gray-400 mr-2" />
-          <h2 className="text-lg font-medium text-gray-900">Filter Alerts</h2>
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-4">
+          <h2 className="text-lg font-medium text-gray-900 flex items-center">
+            <FaFilter className="mr-2" />
+            Filter Alerts
+          </h2>
+          
+          <div className="mt-2 md:mt-0">
+            <button
+              onClick={() => setFilters({
+                camera_id: '',
+                violation_type: '',
+                unresolved_only: false,
+                hours: 24,
+              })}
+              className="text-sm text-gray-600 hover:text-gray-900"
+            >
+              Reset Filters
+            </button>
+          </div>
         </div>
         
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {/* Camera filter */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
-            <label htmlFor="camera_id" className="form-label">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
               Camera
             </label>
             <select
-              id="camera_id"
               name="camera_id"
               value={filters.camera_id}
               onChange={handleFilterChange}
-              className="form-input"
+              className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
             >
               <option value="">All Cameras</option>
               {cameras.map(camera => (
@@ -211,65 +226,57 @@ const AlertsList = () => {
             </select>
           </div>
           
-          {/* Violation type filter */}
           <div>
-            <label htmlFor="violation_type" className="form-label">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
               Violation Type
             </label>
             <select
-              id="violation_type"
               name="violation_type"
               value={filters.violation_type}
               onChange={handleFilterChange}
-              className="form-input"
+              className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
             >
               <option value="">All Types</option>
-              {stats && stats.by_type && Object.keys(stats.by_type).map(type => (
-                <option key={type} value={type}>
-                  {type.replace('_', ' ')}
-                </option>
-              ))}
+              <option value="no_hardhat">No Hard Hat</option>
+              <option value="no_vest">No Safety Vest</option>
+              <option value="no_hardhat,no_vest">No Hat & No Vest</option>
+              <option value="restricted_area">Restricted Area</option>
             </select>
           </div>
           
-          {/* Time range filter */}
           <div>
-            <label htmlFor="hours" className="form-label">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
               Time Range
             </label>
             <select
-              id="hours"
               name="hours"
               value={filters.hours}
               onChange={handleFilterChange}
-              className="form-input"
+              className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
             >
-              <option value="4">Last 4 hours</option>
-              <option value="8">Last 8 hours</option>
-              <option value="24">Last 24 hours</option>
-              <option value="48">Last 2 days</option>
-              <option value="168">Last week</option>
+              <option value={24}>Last 24 Hours</option>
+              <option value={48}>Last 48 Hours</option>
+              <option value={168}>Last 7 Days</option>
+              <option value={720}>Last 30 Days</option>
             </select>
           </div>
           
-          {/* Unresolved only toggle */}
-          <div className="flex items-center pt-7">
-            <input
-              type="checkbox"
-              id="unresolved_only"
-              name="unresolved_only"
-              checked={filters.unresolved_only}
-              onChange={handleFilterChange}
-              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-            />
-            <label htmlFor="unresolved_only" className="ml-2 block text-sm text-gray-900">
-              Show unresolved alerts only
+          <div className="flex items-end">
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                name="unresolved_only"
+                checked={filters.unresolved_only}
+                onChange={handleFilterChange}
+                className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span className="text-sm text-gray-700">Unresolved Only</span>
             </label>
           </div>
         </div>
       </div>
       
-      {/* Stats overview */}
+      {/* Stats */}
       {stats && (
         <div className="bg-white shadow rounded-lg p-4 mb-6">
           <h2 className="text-lg font-medium text-gray-900 mb-4">Statistics</h2>
@@ -305,11 +312,10 @@ const AlertsList = () => {
                 <div className="space-y-1">
                   {Object.values(stats.by_camera)
                     .sort((a, b) => b.count - a.count) // Sort by count (descending)
-                    .slice(0, 5) // Show top 5
-                    .map(({ camera_id, name, count }) => (
-                      <div key={camera_id} className="flex justify-between text-sm">
-                        <span className="truncate">{name}</span>
-                        <span className="font-medium">{count}</span>
+                    .map((cameraStat) => (
+                      <div key={cameraStat.camera_id} className="flex justify-between text-sm">
+                        <span className="truncate" style={{maxWidth: '70%'}}>{cameraStat.name}</span>
+                        <span className="font-medium">{cameraStat.count}</span>
                       </div>
                     ))
                   }
@@ -320,7 +326,7 @@ const AlertsList = () => {
         </div>
       )}
       
-      {/* Alerts table */}
+      {/* Alerts list */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
         {alerts.length === 0 ? (
           <div className="text-center p-8">
@@ -371,26 +377,23 @@ const AlertsList = () => {
                                     e.target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgdmlld0JveD0iMCAwIDIwMCAyMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjIwMCIgaGVpZ2h0PSIyMDAiIGZpbGw9IiNFNUU3RUIiLz48cGF0aCBkPSJNMTAwIDcwQzEwMCA4MS4wNDU3IDkxLjA0NTcgOTAgODAgOTBDNjguOTU0MyA5MCA2MCA4MS4wNDU3IDYwIDcwQzYwIDU4Ljk1NDMgNjguOTU0MyA1MCA4MCA1MEM5MS4wNDU3IDUwIDEwMCA1OC45NTQzIDEwMCA3MFoiIGZpbGw9IiNBMUExQUEiLz48cGF0aCBkPSJNMTQwIDEzMEMxNDAgMTUyLjA5MSAxMjIuMDkxIDE3MCAxMDAgMTcwQzc3LjkwODYgMTcwIDYwIDE1Mi4wOTEgNjAgMTMwQzYwIDEwNy45MDkgNzcuOTA4NiA5MCAxMDAgOTBDMTIyLjA5MSA5MCAxNDAgMTA3LjkwOSAxNDAgMTMwWiIgZmlsbD0iI0ExQTFBQSIvPjwvc3ZnPg==';
                                   }}
                                 />
-                                <div className="absolute bottom-0 left-0 right-0 bg-red-500 bg-opacity-60 text-white text-xs text-center py-0.5">
-                                  {Math.round(alert.confidence * 100)}%
-                                </div>
-                                {alert.bbox && (
-                                  <div className="absolute inset-0 border-2 border-red-400 border-dashed opacity-70"></div>
-                                )}
                               </div>
                             ) : (
-                              <div className="h-14 w-14 rounded-md bg-danger-100 flex items-center justify-center">
-                                <FaBell className="h-5 w-5 text-danger-600" />
+                              <div className="h-14 w-14 rounded-md bg-gray-200 flex items-center justify-center">
+                                <FaExclamationTriangle className="h-6 w-6 text-gray-400" />
                               </div>
                             )}
                           </div>
                           <div className="ml-4">
-                            <div className="text-sm font-medium text-gray-900 flex items-center">
-                              <span className="truncate max-w-[180px]">{alert.violation_type.replace(/_/g, ' ')}</span>
-                              <span className={`ml-2 inline-flex h-2 w-2 rounded-full ${alert.resolved ? 'bg-green-400' : 'bg-red-400'}`}></span>
+                            <div className="text-sm font-medium text-gray-900">
+                              {alert.violation_type.split(',').map(v => 
+                                v.split('_').map(word => 
+                                  word.charAt(0).toUpperCase() + word.slice(1)
+                                ).join(' ')
+                              ).join(', ')}
                             </div>
                             <div className="text-xs text-gray-500">
-                              {new Date(alert.created_at).toLocaleString()}
+                              Confidence: {Math.round(alert.confidence * 100)}%
                             </div>
                           </div>
                         </div>
@@ -398,9 +401,6 @@ const AlertsList = () => {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">
                           {getCameraName(alert.camera_id)}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          ID: {alert.camera_id}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">

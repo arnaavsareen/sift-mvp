@@ -97,6 +97,7 @@ async def websocket_camera_stream(websocket: WebSocket, camera_id: int, db: Sess
             if not processor:
                 # If processor isn't running, send an error message
                 try:
+                    logger.warning(f"Camera {camera_id} is not processing")
                     await websocket.send_json({"type": "error", "message": "Camera not processing"})
                 except Exception as e:
                     logger.error(f"Error sending error message for camera {camera_id}: {str(e)}")
@@ -128,62 +129,60 @@ async def websocket_camera_stream(websocket: WebSocket, camera_id: int, db: Sess
                     small_frame = cv2.resize(frame, (32, 32))  # Tiny version for hashing
                     frame_hash = hashlib.md5(small_frame.tobytes()).hexdigest()
                     
-                    # Only send if the frame has changed significantly
-                    if frame_hash != last_frame_hash:
-                        last_frame_hash = frame_hash
+                    # Encode frame to JPEG with lower quality for faster transmission
+                    success, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                    
+                    if success:
+                        # Convert to base64 for sending over WebSocket
+                        frame_base64 = base64.b64encode(buffer).decode('utf-8')
                         
-                        # Encode frame to JPEG with lower quality for faster transmission
-                        success, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
-                        
-                        if success:
-                            # Convert to base64 for sending over WebSocket
-                            frame_base64 = base64.b64encode(buffer).decode('utf-8')
-                            
-                            # Send the frame with error handling
-                            try:
-                                await websocket.send_json({
-                                    "type": "frame",
-                                    "frame": frame_base64,
-                                    "timestamp": time.time()
-                                })
-                                # Reset error counter on success
-                                consecutive_errors = 0
-                            except WebSocketDisconnect:
-                                logger.info(f"WebSocket disconnected while sending frame for camera {camera_id}")
-                                break
-                            except Exception as e:
-                                consecutive_errors += 1
-                                if consecutive_errors <= MAX_CONSECUTIVE_ERRORS:
-                                    logger.error(f"Error sending frame for camera {camera_id}: {str(e)}")
-                                
-                                # Try to ping only if we haven't hit error limit
-                                if consecutive_errors <= 3:
-                                    try:
-                                        # Send a ping to check connection
-                                        await websocket.send_json({"type": "ping"})
-                                    except:
-                                        # If ping fails, break out of the loop
-                                        logger.info(f"WebSocket connection appears broken for camera {camera_id}")
-                                        break
-                                else:
-                                    # Too many consecutive errors, just break
-                                    logger.info(f"Too many consecutive WebSocket errors for camera {camera_id}, disconnecting")
-                                    break
-                        else:
+                        # Always send frame regardless of hash
+                        # This helps ensure continuous streaming
+                        try:
+                            await websocket.send_json({
+                                "type": "frame",
+                                "frame": frame_base64,
+                                "timestamp": time.time()
+                            })
+                            # Reset error counter on success
+                            consecutive_errors = 0
+                            # Update last frame hash after successful send
+                            last_frame_hash = frame_hash
+                        except WebSocketDisconnect:
+                            logger.info(f"WebSocket disconnected while sending frame for camera {camera_id}")
+                            break
+                        except Exception as e:
                             consecutive_errors += 1
                             if consecutive_errors <= MAX_CONSECUTIVE_ERRORS:
-                                logger.warning(f"Failed to encode frame for camera {camera_id}")
+                                logger.error(f"Error sending frame for camera {camera_id}: {str(e)}")
+                            
+                            # Try to ping only if we haven't hit error limit
+                            if consecutive_errors <= 3:
+                                try:
+                                    # Send a ping to check connection
+                                    await websocket.send_json({"type": "ping"})
+                                except:
+                                    # If ping fails, break out of the loop
+                                    logger.info(f"WebSocket connection appears broken for camera {camera_id}")
+                                    break
+                            else:
+                                # Too many consecutive errors, just break
+                                logger.info(f"Too many consecutive WebSocket errors for camera {camera_id}, disconnecting")
+                                break
+                    else:
+                        consecutive_errors += 1
+                        if consecutive_errors <= MAX_CONSECUTIVE_ERRORS:
+                            logger.warning(f"Failed to encode frame for camera {camera_id}")
                 except Exception as e:
                     consecutive_errors += 1
                     if consecutive_errors <= MAX_CONSECUTIVE_ERRORS:
                         logger.error(f"Error encoding frame for camera {camera_id}: {str(e)}")
             
-            # Longer delay between frames to reduce connection load, with 
-            # dynamic adjustment based on detected connection issues
-            delay = 0.2  # Base delay (~5 FPS)
+            # Shorter delay to increase frame rate (streaming will be more fluid)
+            delay = 0.03  # ~33 FPS - much more fluid video
             if consecutive_errors > 0:
                 # Increase delay when experiencing errors
-                delay = min(1.0, 0.2 + consecutive_errors * 0.1)  # Up to 1 second (1 FPS)
+                delay = min(0.5, 0.03 + consecutive_errors * 0.05)  # Up to 0.5 second
             
             await asyncio.sleep(delay)
             

@@ -11,12 +11,24 @@ const api = axios.create({
   },
 });
 
+// Add axios interceptor to handle trailing slashes
+api.interceptors.request.use(config => {
+  // Add trailing slash to GET requests if not present and not a fully qualified URL
+  if (config.method?.toLowerCase() === 'get' && config.url && !config.url.includes('://')) {
+    if (!config.url.endsWith('/') && !config.url.includes('?')) {
+      config.url = `${config.url}/`;
+    }
+  }
+  return config;
+});
+
 // WebSocket connection utilities
 export const websocketApi = {
   // Create a camera stream connection
   createCameraStream: (cameraId, onFrame, onAlert, onError, onClose) => {
     const createWebSocket = () => {
       // Create a new WebSocket connection
+      console.log(`Connecting to WebSocket at: ${WS_URL}/cameras/${cameraId}/stream`);
       const ws = new WebSocket(`${WS_URL}/cameras/${cameraId}/stream`);
       
       // Connection status
@@ -37,19 +49,25 @@ export const websocketApi = {
           
           if (data.type === 'ping') {
             // Just a ping to keep connection alive, no action needed
+            console.log("Ping received");
             return;
           } else if (data.type === 'frame' && typeof onFrame === 'function') {
+            // Debug log for frame data
+            console.log(`Frame received, size: ${data.frame ? data.frame.length : 0} chars`);
             onFrame(data.frame, data.timestamp);
           } else if (data.type === 'alert' && typeof onAlert === 'function') {
+            console.log("Alert received:", data.data);
             onAlert(data.data);
           } else if (data.type === 'error') {
             console.error(`WebSocket error from server: ${data.message}`);
             if (typeof onError === 'function') {
               onError(data.message);
             }
+          } else {
+            console.warn("Unknown message type:", data.type);
           }
         } catch (err) {
-          console.error('Error processing WebSocket message:', err);
+          console.error('Error processing WebSocket message:', err, event.data);
         }
       };
       
@@ -145,7 +163,7 @@ export const camerasApi = {
   // Delete camera
   delete: async (id) => {
     const response = await api.delete(`/cameras/${id}`);
-    return response.data;
+    return response.data || { status: "success" }; // Handle empty response
   },
   
   // Start camera processing

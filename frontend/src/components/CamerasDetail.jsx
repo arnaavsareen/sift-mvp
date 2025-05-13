@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { camerasApi, dashboardApi, alertsApi, websocketApi } from '../api/api';
+import Hls from 'hls.js';
 import { 
   FaVideo, 
   FaPlay, 
@@ -14,9 +15,8 @@ import {
 const CameraDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const frameRef = useRef(null);
+  const videoRef = useRef(null);
   const wsRef = useRef(null);
-  const canvasRef = useRef(null);
   
   const [camera, setCamera] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -25,6 +25,7 @@ const CameraDetail = () => {
   const [error, setError] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [wsError, setWsError] = useState(null);
+  const [isVideoMode, setIsVideoMode] = useState(false);
   
   // Form state
   const [formData, setFormData] = useState({
@@ -40,6 +41,17 @@ const CameraDetail = () => {
       const data = await camerasApi.getById(id);
       setCamera(data);
       
+      // Check if this is a direct video URL (file, RTSP, HTTP video)
+      const isVideoUrl = data.url.startsWith('file://') || 
+                         data.url.startsWith('rtsp://') || 
+                         data.url.startsWith('http://') ||
+                         data.url.startsWith('https://') ||
+                         data.url.endsWith('.mp4') ||
+                         data.url.endsWith('.mov') ||
+                         data.url.endsWith('.webm');
+      
+      setIsVideoMode(isVideoUrl);
+      
       // Initialize form data
       setFormData({
         name: data.name,
@@ -51,7 +63,7 @@ const CameraDetail = () => {
       return data;
     } catch (err) {
       console.error(`Error fetching camera ${id}:`, err);
-      setError('Failed to load camera details. Please try again later.');
+      setError('Failed to load camera details. Please try again.');
       return null;
     }
   };
@@ -97,9 +109,103 @@ const CameraDetail = () => {
     loadCamera();
   }, [id]);
   
-  // Frame refresh using WebSocket
+  // Handle direct video playback
   useEffect(() => {
-    if (!isProcessing) {
+    if (!isProcessing || !isVideoMode || !camera || !videoRef.current) return;
+    
+    const handlePlayError = (err) => {
+      console.error("Error playing video:", err);
+      setWsError("Failed to play video. Trying alternative methods...");
+      
+      // Try falling back to WebSocket mode if direct playback fails after multiple attempts
+      if (playAttempts > 2) {
+        console.log("Too many failed play attempts, switching to WebSocket mode");
+        setIsVideoMode(false);
+      }
+    };
+    
+    let playAttempts = 0;
+    
+    // Always use our streaming endpoint for all URL types
+    // This ensures consistent handling and proxying through our backend
+    const streamingUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/cameras/${id}/stream?format=video&t=${new Date().getTime()}`;
+    console.log("Setting video source to streaming URL:", streamingUrl);
+    
+    const loadVideo = () => {
+      playAttempts++;
+      console.log(`Play attempt ${playAttempts}`);
+      
+      // Set a timeout to detect if video loading takes too long
+      const timeoutId = setTimeout(() => {
+        if (videoRef.current && videoRef.current.readyState === 0) {
+          console.warn("Video loading timed out");
+          setWsError("Video loading timed out. Falling back to WebSocket mode...");
+          setIsVideoMode(false);
+        }
+      }, 10000); // 10 second timeout
+      
+      // Clean up the timeout if video starts loading
+      videoRef.current.onloadedmetadata = () => {
+        console.log("Video metadata loaded successfully");
+        clearTimeout(timeoutId);
+      };
+      
+      videoRef.current.onerror = (e) => {
+        console.error("Video element error:", e);
+        clearTimeout(timeoutId);
+        
+        // Get detailed error information
+        const errorCode = videoRef.current.error ? videoRef.current.error.code : 0;
+        const errorMessage = videoRef.current.error ? videoRef.current.error.message : "Unknown error";
+        setWsError(`Video error (${errorCode}): ${errorMessage}`);
+        
+        if (playAttempts <= 2) {
+          // Add a timestamp to prevent caching issues
+          const retryUrl = `${streamingUrl}&retry=${playAttempts}`;
+          console.log("Error in video playback, retrying with:", retryUrl);
+          
+          // Small delay to prevent rapid retries
+          setTimeout(() => {
+            videoRef.current.src = retryUrl;
+            videoRef.current.load();
+            videoRef.current.play().catch(handlePlayError);
+          }, 1000);
+        } else {
+          // If we've tried multiple times, switch to WebSocket mode
+          setIsVideoMode(false);
+        }
+      };
+      
+      // Set the video source and attempt to play
+      videoRef.current.src = streamingUrl;
+      videoRef.current.load();
+      videoRef.current.play().catch(handlePlayError);
+    };
+    
+    // Initial load attempt
+    loadVideo();
+    
+    return () => {
+      if (videoRef.current) {
+        // Stop any media playing
+        videoRef.current.onloadedmetadata = null;
+        videoRef.current.onerror = null;
+        videoRef.current.pause();
+        videoRef.current.src = "";
+        
+        // Clean up HLS.js if it was used
+        const hlsInstance = videoRef.current.hlsInstance;
+        if (hlsInstance) {
+          hlsInstance.destroy();
+          delete videoRef.current.hlsInstance;
+        }
+      }
+    };
+  }, [isProcessing, isVideoMode, camera, id]);
+  
+  // For cameras that don't support direct video streaming, use WebSocket
+  useEffect(() => {
+    if (!isProcessing || isVideoMode) {
       // Clean up any existing connection
       if (wsRef.current) {
         wsRef.current.close();
@@ -109,64 +215,62 @@ const CameraDetail = () => {
       return;
     }
     
-    // Start WebSocket connection for streaming
-    const onFrame = (frameData, timestamp) => {
-      if (frameRef.current) {
-        // Ensure we're correctly setting the image source with the base64 data
-        if (typeof frameData === 'string') {
-          frameRef.current.src = `data:image/jpeg;base64,${frameData}`;
-          frameRef.current.style.display = 'block';
-          
-          // Clear any error indicators
-          setWsError(null);
-        }
-      }
-    };
+    // Start WebSocket connection for streaming frames
+    const frameImg = document.getElementById('frame-img');
+    const errorMessage = document.getElementById('camera-error-message');
     
-    const onAlert = (alertData) => {
-      console.log("Received alert via WebSocket:", alertData);
-      
-      // When a new alert is received via WebSocket, update the alerts list
-      setAlerts(prevAlerts => {
-        // Check if alert already exists
-        const exists = prevAlerts.some(a => a.id === alertData.id);
-        if (exists) return prevAlerts;
+    // Initialize WebSocket for real-time frame streaming
+    wsRef.current = websocketApi.createCameraStream(
+      id,
+      // onFrame handler
+      (frameData, timestamp) => {
+        if (!frameImg || !frameData) return;
         
-        // Add to beginning of list
-        return [alertData, ...prevAlerts].slice(0, 5);
-      });
-    };
-    
-    const onError = (error) => {
-      console.error("WebSocket error:", error);
-      setWsError(error.toString());
-      
-      // If WebSocket fails, fall back to regular polling
-      if (frameRef.current) {
-        const timestamp = new Date().getTime();
-        frameRef.current.src = `${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/dashboard/cameras/${id}/latest-frame?format=jpeg&t=${timestamp}`;
+        // Hide error message if it's visible
+        if (errorMessage && !errorMessage.classList.contains('hidden')) {
+          errorMessage.classList.add('hidden');
+        }
+        
+        // Show the frame image if it's hidden
+        if (frameImg.classList.contains('hidden')) {
+          frameImg.classList.remove('hidden');
+        }
+        
+        // Set the image source to the received frame
+        frameImg.src = `data:image/jpeg;base64,${frameData}`;
+        
+        // Reset error state
+        setWsError(null);
+      },
+      // onAlert handler (not used here, alerts handled separately)
+      null,
+      // onError handler
+      (errorMsg) => {
+        console.error(`WebSocket error for camera ${id}:`, errorMsg);
+        setWsError(errorMsg);
+        
+        // Show error message if error persists
+        if (errorMsg.includes('Failed to reconnect') && errorMessage) {
+          frameImg.classList.add('hidden');
+          errorMessage.classList.remove('hidden');
+        }
+      },
+      // onClose handler
+      (event) => {
+        console.log(`WebSocket closed for camera ${id}:`, event);
       }
-    };
+    );
     
-    const onClose = (event) => {
-      // Connection closed - this is handled by the WebSocket library's automatic reconnection logic
-      if (event.code !== 1000) { // Not a normal closure
-        console.log("WebSocket connection closed abnormally:", event.code, event.reason);
-      }
-    };
-    
-    console.log("Creating WebSocket connection for camera:", id);
-    const ws = websocketApi.createCameraStream(id, onFrame, onAlert, onError, onClose);
-    wsRef.current = ws;
-    
+    // Cleanup function to close WebSocket when component unmounts or deps change
     return () => {
       if (wsRef.current) {
-        console.log("Cleaning up WebSocket connection");
+        // Set closedManually to prevent auto-reconnect
+        wsRef.current.closedManually = true;
         wsRef.current.close();
         wsRef.current = null;
       }
     };
-  }, [id, isProcessing]);
+  }, [id, isProcessing, isVideoMode]);
   
   // Handle form input changes
   const handleInputChange = (e) => {
@@ -226,6 +330,112 @@ const CameraDetail = () => {
     }
   };
   
+  // Render the camera view based on type
+  const renderCameraView = () => {
+    if (!isProcessing) {
+      return (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-800 text-white">
+          <FaVideo className="h-16 w-16 text-gray-400 mb-4" />
+          <p className="text-xl font-medium text-center mb-2">No Active Video Feed</p>
+          <p className="text-gray-400 max-w-md text-center mb-6">
+            Camera is not currently monitoring. 
+            Click "Start Monitoring" to begin processing the video feed.
+          </p>
+          <button
+            onClick={startCamera}
+            className="inline-flex items-center px-4 py-2.5 rounded-lg bg-green-600 text-white hover:bg-green-700 font-medium text-sm transition-colors shadow-sm"
+          >
+            <FaPlay className="mr-2 h-4 w-4" />
+            <span>Start Monitoring</span>
+          </button>
+        </div>
+      );
+    }
+    
+    return (
+      <>
+        {isVideoMode ? (
+          // For direct video feeds, use the HTML5 video element
+          <video
+            ref={videoRef}
+            className="w-full h-full object-contain bg-black"
+            autoPlay
+            playsInline
+            muted
+            controls={false}
+          />
+        ) : (
+          // For non-video feeds, continue using image-based approach
+          <img
+            id="frame-img"
+            src={`${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/dashboard/cameras/${id}/latest-frame?format=jpeg&t=${new Date().getTime()}`}
+            alt="Camera feed"
+            className="w-full h-full object-contain bg-black"
+            onError={(e) => {
+              e.target.src = '';
+              e.target.className = 'hidden';
+              document.getElementById('camera-error-message').classList.remove('hidden');
+            }}
+          />
+        )}
+        
+        {/* Overlay with camera information */}
+        <div className="absolute top-0 left-0 p-3 flex flex-col space-y-1">
+          <div className="flex items-center space-x-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded text-sm">
+            <FaVideo className="h-4 w-4" />
+            <span>Camera {camera.name}</span>
+          </div>
+          {camera.location && (
+            <div className="bg-black bg-opacity-50 text-white px-2 py-1 rounded text-sm flex items-center space-x-2">
+              <span>📍 {camera.location}</span>
+            </div>
+          )}
+        </div>
+        
+        {/* Timestamp */}
+        <div className="absolute bottom-3 right-3 bg-black bg-opacity-50 px-2 py-1 rounded text-xs text-white">
+          {new Date().toLocaleTimeString()}
+        </div>
+        
+        {/* Error message overlay (hidden by default) */}
+        <div id="camera-error-message" className="hidden absolute inset-0 flex flex-col items-center justify-center bg-gray-800 text-white">
+          <FaExclamationTriangle className="h-16 w-16 text-yellow-500 mb-4" />
+          <p className="text-xl font-medium text-center mb-2">Connection Error</p>
+          <p className="text-gray-400 max-w-md text-center mb-6">
+            Unable to load camera feed. 
+            The camera might be offline or the stream URL is invalid.
+          </p>
+          <div className="flex space-x-4">
+            <button
+              onClick={() => {
+                if (videoRef.current) {
+                  videoRef.current.load();
+                } else {
+                  const frameImg = document.getElementById('frame-img');
+                  if (frameImg) {
+                    frameImg.src = `${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/dashboard/cameras/${id}/latest-frame?format=jpeg&t=${new Date().getTime()}`;
+                    frameImg.classList.remove('hidden');
+                  }
+                  document.getElementById('camera-error-message').classList.add('hidden');
+                }
+              }}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center space-x-2"
+            >
+              <span>Retry Connection</span>
+            </button>
+            <button
+              onClick={stopCamera}
+              className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 flex items-center space-x-2"
+            >
+              <FaStop className="h-4 w-4" />
+              <span>Stop Monitoring</span>
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  };
+  
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -261,31 +471,31 @@ const CameraDetail = () => {
           <FaArrowLeft className="text-xl" />
         </Link>
         <h1 className="text-2xl font-bold text-gray-900 flex-grow">{camera.name}</h1>
-        <div className="space-x-2">
+        <div className="flex space-x-3">
           {camera.is_active && (
             isProcessing ? (
               <button
                 onClick={stopCamera}
-                className="btn-danger"
+                className="inline-flex items-center px-4 py-2.5 rounded-lg bg-red-600 text-white hover:bg-red-700 font-medium text-sm transition-colors shadow-sm"
               >
-                <FaStop className="mr-2" />
+                <FaStop className="mr-2 h-4 w-4" />
                 Stop Monitoring
               </button>
             ) : (
               <button
                 onClick={startCamera}
-                className="btn-success"
+                className="inline-flex items-center px-4 py-2.5 rounded-lg bg-green-600 text-white hover:bg-green-700 font-medium text-sm transition-colors shadow-sm"
               >
-                <FaPlay className="mr-2" />
+                <FaPlay className="mr-2 h-4 w-4" />
                 Start Monitoring
               </button>
             )
           )}
           <button
             onClick={() => setShowEditModal(true)}
-            className="btn-secondary"
+            className="inline-flex items-center px-4 py-2.5 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 font-medium text-sm transition-colors shadow-sm"
           >
-            <FaEdit className="mr-2" />
+            <FaEdit className="mr-2 h-4 w-4" />
             Edit
           </button>
         </div>
@@ -307,80 +517,7 @@ const CameraDetail = () => {
             </h2>
             <div className="bg-gray-100 rounded-lg w-full overflow-hidden flex items-center justify-center shadow-inner relative">
               <div className="aspect-video w-full relative">
-                {isProcessing ? (
-                  <>
-                    <img
-                      ref={frameRef}
-                      src={`${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/dashboard/cameras/${id}/latest-frame?format=jpeg&t=${new Date().getTime()}`}
-                      alt="Camera feed"
-                      className="w-full h-full object-contain bg-black"
-                      onError={(e) => {
-                        e.target.src = '';
-                        e.target.className = 'hidden';
-                        document.getElementById('camera-error-message').classList.remove('hidden');
-                      }}
-                    />
-                    <div className="absolute top-0 left-0 p-3 flex flex-col space-y-1">
-                      <div className="flex items-center space-x-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded text-sm">
-                        <FaVideo className="h-4 w-4" />
-                        <span>Camera {camera.name}</span>
-                      </div>
-                      {camera.location && (
-                        <div className="bg-black bg-opacity-50 text-white px-2 py-1 rounded text-sm flex items-center space-x-2">
-                          <span>📍 {camera.location}</span>
-                        </div>
-                      )}
-                    </div>
-                    <div className="absolute bottom-3 right-3 bg-black bg-opacity-50 px-2 py-1 rounded text-xs text-white">
-                      {new Date().toLocaleTimeString()}
-                    </div>
-                  </>
-                ) : (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-800 text-white">
-                    <FaVideo className="h-16 w-16 text-gray-400 mb-4" />
-                    <p className="text-xl font-medium text-center mb-2">No Active Video Feed</p>
-                    <p className="text-gray-400 max-w-md text-center mb-6">
-                      Camera is not currently monitoring. 
-                      Click "Start Monitoring" to begin processing the video feed.
-                    </p>
-                    <button
-                      onClick={startCamera}
-                      className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 flex items-center space-x-2"
-                    >
-                      <FaPlay className="h-4 w-4" />
-                      <span>Start Monitoring</span>
-                    </button>
-                  </div>
-                )}
-                <div id="camera-error-message" className="hidden absolute inset-0 flex flex-col items-center justify-center bg-gray-800 text-white">
-                  <FaExclamationTriangle className="h-16 w-16 text-yellow-500 mb-4" />
-                  <p className="text-xl font-medium text-center mb-2">Connection Error</p>
-                  <p className="text-gray-400 max-w-md text-center mb-6">
-                    Unable to load camera feed. 
-                    The camera might be offline or the stream URL is invalid.
-                  </p>
-                  <div className="flex space-x-4">
-                    <button
-                      onClick={() => {
-                        if (frameRef.current) {
-                          frameRef.current.src = `${process.env.REACT_APP_API_URL || 'http://localhost:8000/api'}/dashboard/cameras/${id}/latest-frame?format=jpeg&t=${new Date().getTime()}`;
-                          frameRef.current.classList.remove('hidden');
-                          document.getElementById('camera-error-message').classList.add('hidden');
-                        }
-                      }}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center space-x-2"
-                    >
-                      <span>Retry Connection</span>
-                    </button>
-                    <button
-                      onClick={stopCamera}
-                      className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 flex items-center space-x-2"
-                    >
-                      <FaStop className="h-4 w-4" />
-                      <span>Stop Monitoring</span>
-                    </button>
-                  </div>
-                </div>
+                {renderCameraView()}
               </div>
             </div>
             
@@ -391,7 +528,7 @@ const CameraDetail = () => {
                   <p className={wsError ? 'text-danger-700' : 'text-success-700'}>
                     {wsError 
                       ? `Connection issue: ${wsError}` 
-                      : 'Connected via WebSocket'}
+                      : isVideoMode ? "Direct video stream" : "Connected via WebSocket"}
                   </p>
                 </div>
                 <div className="text-gray-500 text-xs">
@@ -583,15 +720,15 @@ const CameraDetail = () => {
             ></div>
             
             {/* Modal */}
-            <div className="bg-white rounded-lg overflow-hidden shadow-xl transform transition-all sm:max-w-lg sm:w-full z-10">
-              <div className="px-6 py-4 bg-primary-700 text-white">
-                <h3 className="text-lg font-medium">Edit Camera</h3>
+            <div className="bg-white rounded-xl overflow-hidden shadow-2xl transform transition-all sm:max-w-lg sm:w-full z-10 border border-gray-200">
+              <div className="px-6 py-4 bg-white border-b border-gray-100">
+                <h3 className="text-xl font-semibold text-gray-900">Edit Camera</h3>
               </div>
               
               <form onSubmit={handleSubmit}>
                 <div className="p-6 space-y-4">
                   <div>
-                    <label htmlFor="name" className="form-label">
+                    <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
                       Camera Name
                     </label>
                     <input
@@ -600,13 +737,13 @@ const CameraDetail = () => {
                       name="name"
                       value={formData.name}
                       onChange={handleInputChange}
-                      className="form-input"
+                      className="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 placeholder-gray-400 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm"
                       required
                     />
                   </div>
                   
                   <div>
-                    <label htmlFor="url" className="form-label">
+                    <label htmlFor="url" className="block text-sm font-medium text-gray-700 mb-1">
                       Stream URL
                     </label>
                     <input
@@ -615,7 +752,7 @@ const CameraDetail = () => {
                       name="url"
                       value={formData.url}
                       onChange={handleInputChange}
-                      className="form-input"
+                      className="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 placeholder-gray-400 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm"
                       placeholder="rtsp:// or http:// stream URL"
                       required
                     />
@@ -625,7 +762,7 @@ const CameraDetail = () => {
                   </div>
                   
                   <div>
-                    <label htmlFor="location" className="form-label">
+                    <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-1">
                       Location (Optional)
                     </label>
                     <input
@@ -634,7 +771,7 @@ const CameraDetail = () => {
                       name="location"
                       value={formData.location}
                       onChange={handleInputChange}
-                      className="form-input"
+                      className="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 placeholder-gray-400 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm"
                       placeholder="e.g., Factory Floor, Assembly Line 1"
                     />
                   </div>
@@ -654,17 +791,17 @@ const CameraDetail = () => {
                   </div>
                 </div>
                 
-                <div className="px-6 py-4 bg-gray-50 flex justify-end space-x-2">
+                <div className="px-6 py-4 bg-gray-50 flex justify-end space-x-2 border-t border-gray-100">
                   <button
                     type="button"
-                    className="btn-secondary"
+                    className="inline-flex items-center px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 font-medium text-sm transition-colors"
                     onClick={() => setShowEditModal(false)}
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="btn-primary"
+                    className="inline-flex items-center px-4 py-2 rounded-lg bg-primary-600 text-white hover:bg-primary-700 font-medium text-sm transition-colors shadow-sm"
                   >
                     Save Changes
                   </button>

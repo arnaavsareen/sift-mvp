@@ -211,28 +211,9 @@ class DetectionService:
             # Log detection counts
             logger.info(f"Detection found {len(boxes)} objects with confidence threshold {self.confidence}")
             
-            # If we're not detecting anything but there are clearly people in the frame,
-            # add a default person detection (for demonstration)
-            # This is a fallback to ensure we get some detections
+            # Remove the fallback detection mechanism
             if len(boxes) == 0:
-                # Add default person detection for the center of the frame
-                h, w = frame.shape[:2]
-                # Create a box around the center area of the frame
-                center_box = [w/4, h/4, w*3/4, h*3/4]  # Centered box covering middle area
-                
-                # Check if there's a person-like object in this area (simple check)
-                center_region = frame[int(h/4):int(h*3/4), int(w/4):int(w*3/4)]
-                # Very simple heuristic - if there's some variation in the center, assume it's a person
-                if center_region.std() > 25:  # Arbitrary threshold for variation
-                    logger.info("No detections but found potential person in center area")
-                    detections.append({
-                        "bbox": [float(x) for x in center_box],
-                        "class": "person",
-                        "confidence": 0.5,  # Medium confidence
-                        "violation": True,  # Flag as violation
-                        "violation_type": "no_hardhat,no_vest"  # Default violation types
-                    })
-                    return detections
+                return []
             
             # Extract all persons first for associating PPE
             persons = []

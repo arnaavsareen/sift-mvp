@@ -125,22 +125,6 @@ const Layout = () => {
               <FaVideo className="h-5 w-5" />
               {sidebarOpen && 'Cameras'}
             </NavLink>
-            <NavLink
-              to="/alerts"
-              onClick={closeSidebarOnMobile}
-              className={({ isActive }) =>
-                `flex items-center ${sidebarOpen ? 'px-4' : 'justify-center'} py-3 text-sm font-medium rounded-lg transition-colors gap-3 ${
-                  isActive
-                    ? 'bg-primary-50 text-primary-600'
-                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                }`
-              }
-              aria-current={({ isActive }) => (isActive ? 'page' : undefined)}
-              title="Alerts"
-            >
-              <FaBell className="h-5 w-5" />
-              {sidebarOpen && 'Alerts'}
-            </NavLink>
             
             {sidebarOpen && (
               <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-3 mt-6 mb-3">Resources</div>
@@ -223,10 +207,6 @@ const Layout = () => {
               >
                 <FaCog className="h-5 w-5" />
               </button>
-              <div className="hidden md:flex items-center ml-3 px-3 py-1.5 rounded-lg bg-primary-50 text-primary-600 text-sm font-medium">
-                <FaShieldAlt className="mr-2 h-4 w-4" />
-                Safety Mode
-              </div>
             </div>
           </div>
         </header>
