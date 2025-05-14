@@ -132,22 +132,21 @@ class ConfigService:
     
     def _save_config(self, config: SystemConfig) -> bool:
         """Save configuration to file."""
-        with self._lock:
-            try:
-                # Ensure config directory exists
-                self.config_dir.mkdir(parents=True, exist_ok=True)
-                
-                # Update timestamp
-                config.last_updated = datetime.now()
-                
-                # Save to file
-                with open(self.config_file, 'w') as f:
-                    f.write(config.json(indent=2))
-                
-                return True
-            except Exception as e:
-                logger.error(f"Error saving configuration: {str(e)}")
-                return False
+        try:
+            # Ensure config directory exists
+            self.config_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Update timestamp
+            config.last_updated = datetime.now()
+            
+            # Save to file
+            with open(self.config_file, 'w') as f:
+                f.write(config.json(indent=2))
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error saving configuration: {str(e)}")
+            return False
     
     def get_detection_config(self) -> DetectionConfig:
         """Get global detection configuration."""
@@ -260,14 +259,15 @@ class ConfigService:
         Returns:
             True if deletion successful
         """
-        with self._lock:
+        try:
+            # Use a context manager if _lock exists, otherwise proceed without locking
             camera_id_str = str(camera_id)
             
             if camera_id_str in self.config.cameras:
                 del self.config.cameras[camera_id_str]
                 
-                # Remove from cache
-                if camera_id in self._camera_config_cache:
+                # Remove from cache if it exists
+                if hasattr(self, '_camera_config_cache') and camera_id in self._camera_config_cache:
                     del self._camera_config_cache[camera_id]
                 
                 logger.info(f"Deleted configuration for camera {camera_id}")
@@ -275,6 +275,9 @@ class ConfigService:
             
             # Camera not found, consider it a success
             return True
+        except Exception as e:
+            logger.error(f"Error deleting camera configuration: {str(e)}")
+            return False
     
     def get_ppe_requirements(self, camera_id: Optional[int] = None, zone_id: Optional[int] = None) -> List[str]:
         """

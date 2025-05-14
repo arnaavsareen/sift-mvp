@@ -11,13 +11,17 @@ import subprocess
 import uuid
 import shutil
 import httpx
+import json
+import asyncio
+from sqlalchemy import desc
 
 from backend.database import get_db
-from backend.models import Camera
+from backend.models import Camera, Alert, Zone
 from backend.services.detection import get_detection_service
 from backend.services.alert import get_alert_service
-from backend.services.video import start_processor, stop_processor, get_processor, get_all_processors
+from backend.services.video import start_processor, stop_processor, get_processor, get_all_processors, get_all_statuses
 from backend.services.config_service import get_config_service
+from backend.config import SCREENSHOTS_DIR
 
 # Pydantic models for request/response
 from pydantic import BaseModel
@@ -125,26 +129,56 @@ def update_camera(
 @router.delete("/{camera_id}", response_model=dict)
 def delete_camera(camera_id: int, db: Session = Depends(get_db)):
     """Delete camera."""
-    # First stop processing if running
-    processor = get_processor(camera_id)
-    if processor:
-        stop_processor(camera_id)
-    
-    # Then delete from database
-    db_camera = db.query(Camera).filter(Camera.id == camera_id).first()
-    if not db_camera:
-        raise HTTPException(status_code=404, detail="Camera not found")
-    
-    # Get config service and delete camera configuration
-    config_service = get_config_service(db)
-    config_service.delete_camera_config(camera_id)
-    
-    # Delete the camera from the database
-    db.delete(db_camera)
-    db.commit()
-    
-    # Return a success message
-    return {"status": "success", "message": f"Camera {camera_id} deleted successfully"}
+    try:
+        # First stop processing if running
+        processor = get_processor(camera_id)
+        if processor:
+            stop_processor(camera_id)
+            logger.info(f"Stopped video processor for camera {camera_id}")
+        
+        # Then delete from database
+        db_camera = db.query(Camera).filter(Camera.id == camera_id).first()
+        if not db_camera:
+            raise HTTPException(status_code=404, detail="Camera not found")
+        
+        # Get all alerts for this camera to delete screenshot files
+        alerts = db.query(Alert).filter(Alert.camera_id == camera_id).all()
+        screenshot_dir = Path(SCREENSHOTS_DIR)
+        
+        # Delete screenshot files
+        for alert in alerts:
+            if alert.screenshot_path:
+                try:
+                    screenshot_path = screenshot_dir / Path(alert.screenshot_path).name
+                    if screenshot_path.exists():
+                        screenshot_path.unlink()
+                        logger.info(f"Deleted screenshot file: {screenshot_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete screenshot file for alert {alert.id}: {str(e)}")
+        
+        # Delete all associated alerts
+        deleted_alerts = db.query(Alert).filter(Alert.camera_id == camera_id).delete()
+        logger.info(f"Deleted {deleted_alerts} alerts for camera {camera_id}")
+        
+        # Delete all associated zones
+        deleted_zones = db.query(Zone).filter(Zone.camera_id == camera_id).delete()
+        logger.info(f"Deleted {deleted_zones} zones for camera {camera_id}")
+        
+        # Get config service and delete camera configuration
+        config_service = get_config_service(db)
+        config_service.delete_camera_config(camera_id)
+        
+        # Delete the camera from the database
+        db.delete(db_camera)
+        db.commit()
+        
+        # Return a success message
+        return {"status": "success", "message": f"Camera {camera_id} deleted successfully"}
+    except Exception as e:
+        # Roll back transaction on error
+        db.rollback()
+        logger.error(f"Error deleting camera {camera_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete camera: {str(e)}")
 
 @router.post("/{camera_id}/start", response_model=dict)
 def start_camera(camera_id: int, db: Session = Depends(get_db)):

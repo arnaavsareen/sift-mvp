@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { alertsApi, camerasApi } from '../api/api';
+import { formatViolationType } from '../utils/formatting';
 import { 
   FaBell, 
   FaExclamationTriangle, 
@@ -297,7 +298,9 @@ const AlertsList = () => {
                     .sort((a, b) => b[1] - a[1]) // Sort by count (descending)
                     .map(([type, count]) => (
                       <div key={type} className="flex justify-between text-sm">
-                        <span>{type.replace('_', ' ')}</span>
+                        <span>
+                          {formatViolationType(type)}
+                        </span>
                         <span className="font-medium">{count}</span>
                       </div>
                     ))
@@ -386,11 +389,7 @@ const AlertsList = () => {
                           </div>
                           <div className="ml-4">
                             <div className="text-sm font-medium text-gray-900">
-                              {alert.violation_type.split(',').map(v => 
-                                v.split('_').map(word => 
-                                  word.charAt(0).toUpperCase() + word.slice(1)
-                                ).join(' ')
-                              ).join(', ')}
+                              {formatViolationType(alert.violation_type)}
                             </div>
                             <div className="text-xs text-gray-500">
                               Confidence: {Math.round(alert.confidence * 100)}%

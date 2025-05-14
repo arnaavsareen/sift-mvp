@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { dashboardApi, camerasApi, alertsApi } from '../api/api';
+import { formatViolationType } from '../utils/formatting';
 import { 
   FaVideo, 
   FaBell, 
@@ -124,25 +125,25 @@ const Dashboard = () => {
       });
     });
 
-    // Modern color palette
+    // Modern color palette with more vibrant colors
     const palette = [
       '#ef4444', // red
-      '#f59e42', // orange
-      '#fbbf24', // yellow
+      '#f97316', // orange
+      '#eab308', // yellow
       '#10b981', // emerald
       '#3b82f6', // blue
-      '#6366f1', // indigo
-      '#a855f7', // purple
+      '#8b5cf6', // purple
+      '#ec4899', // pink
     ];
 
     // Prepare datasets
     const datasets = Array.from(violationTypes).map((type, index) => {
       const color = palette[index % palette.length];
       return {
-        label: type.replace(/_/g, ' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
+        label: formatViolationType(type),
         data: timeline.timeline.map(item => item.by_type?.[type] || 0),
         borderColor: color,
-        backgroundColor: color + '22', // subtle fill
+        backgroundColor: color + '20', // subtle fill
         pointBackgroundColor: color,
         pointBorderColor: '#fff',
         pointRadius: 3,
@@ -190,11 +191,19 @@ const Dashboard = () => {
           padding: 20,
           usePointStyle: true,
           pointStyle: 'circle',
-          font: { size: 15, weight: '500' },
+          font: { size: 14, weight: '500' },
+          boxWidth: 8,
+          boxHeight: 8,
+          useBorderRadius: true,
+          borderRadius: 4,
         },
       },
       title: {
-        display: false,
+        display: true,
+        text: 'Safety Violation Trends',
+        font: { size: 16, weight: '600' },
+        padding: { top: 10, bottom: 20 },
+        color: '#111827',
       },
       tooltip: {
         enabled: true,
@@ -207,6 +216,13 @@ const Dashboard = () => {
         caretSize: 8,
         cornerRadius: 8,
         displayColors: true,
+        callbacks: {
+          label: function(context) {
+            const label = context.dataset.label || '';
+            const value = context.parsed.y;
+            return `${label}: ${value} alerts`;
+          }
+        }
       },
     },
     scales: {
@@ -219,10 +235,13 @@ const Dashboard = () => {
           display: true,
           text: 'Number of Alerts',
           font: { size: 13, weight: '500' },
+          padding: { bottom: 10 },
+          color: '#4b5563',
         },
         ticks: {
           color: '#6b7280',
-          font: { size: 13 },
+          font: { size: 12 },
+          precision: 0,
         },
       },
       x: {
@@ -231,11 +250,11 @@ const Dashboard = () => {
         },
         ticks: {
           color: '#6b7280',
-          font: { size: 13 },
+          font: { size: 12 },
           maxRotation: 30,
           minRotation: 0,
           autoSkip: true,
-          maxTicksLimit: 10,
+          maxTicksLimit: 8,
         },
       },
     },
@@ -591,7 +610,7 @@ const Dashboard = () => {
                     <div className="relative bg-gray-900">
                       <img
                         src={`${process.env.REACT_APP_API_URL?.replace('/api', '') || 'http://localhost:8000'}${alert.screenshot_path.startsWith('/') ? '' : '/screenshots/'}${alert.screenshot_path}`}
-                        alt={`${alert.violation_type.replace(/_/g, ' ')} violation`}
+                        alt={`${formatViolationType(alert.violation_type).toUpperCase()} violation`}
                         className="w-full h-48 object-cover"
                         onError={(e) => {
                           e.target.onerror = null;
@@ -603,7 +622,7 @@ const Dashboard = () => {
                           <div className="flex items-center space-x-2">
                             <FaExclamationTriangle className="text-yellow-400" />
                             <span className="font-medium text-sm">
-                              {alert.violation_type.replace(/_/g, ' ').toUpperCase()}
+                              {formatViolationType(alert.violation_type).toUpperCase()}
                             </span>
                           </div>
                           <div className="flex items-center gap-1 bg-red-500 text-white text-xs px-2 py-1 rounded-full">
@@ -642,7 +661,7 @@ const Dashboard = () => {
                         <div className="flex items-center">
                           <FaBell className="h-4 w-4 text-danger-500 mr-2 flex-shrink-0" />
                           <p className="text-sm font-medium text-gray-900 truncate">
-                            {alert.violation_type.replace(/_/g, " ")}
+                            {formatViolationType(alert.violation_type)}
                           </p>
                         </div>
                         <div>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { alertsApi, camerasApi } from '../api/api';
+import { formatViolationType } from '../utils/formatting';
 import { 
   FaBell, 
   FaArrowLeft, 
@@ -115,7 +116,7 @@ const AlertDetail = () => {
           <div className="card p-4">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-medium text-gray-900">
-                {alert.violation_type.replace('_', ' ')}
+                {formatViolationType(alert.violation_type)}
               </h2>
               <span
                 className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
@@ -206,7 +207,7 @@ const AlertDetail = () => {
                   
                   {/* Violation type annotation */}
                   <div className="absolute top-0 left-0 bg-black bg-opacity-50 text-white text-sm px-3 py-1 m-2 rounded-md">
-                    {alert.violation_type.replace(/_/g, ' ')}
+                    {formatViolationType(alert.violation_type)}
                   </div>
                   
                   {/* Confidence score */}
@@ -379,13 +380,14 @@ const AlertDetail = () => {
                 View all alerts from this camera
               </Link>
               
-              <Link
-                to={`/alerts?type=${alert.violation_type}`}
-                className="flex items-center text-primary-600 hover:text-primary-800"
-              >
-                <FaExclamationTriangle className="mr-2" />
-                View all {alert.violation_type.replace('_', ' ')} alerts
-              </Link>
+              <div className="flex justify-center mt-6">
+                <Link 
+                  to={`/alerts?type=${alert.violation_type}`} 
+                  className="text-primary-600 hover:text-primary-800"
+                >
+                  View all {formatViolationType(alert.violation_type)} alerts
+                </Link>
+              </div>
               
               <button
                 onClick={resolveAlert}

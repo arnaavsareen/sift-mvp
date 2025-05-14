@@ -466,11 +466,11 @@ class VideoProcessor:
         try:
             annotated = frame.copy()
             
-            # Enhanced color mapping
+            # Enhanced color map with more visible colors
             color_map = {
                 "person": (0, 255, 0),      # Green for safe persons
                 "hardhat": (0, 255, 255),   # Yellow for hardhat
-                "vest": (255, 128, 0),      # Orange for vest
+                "vest": (255, 165, 0),      # Orange for vest
                 "violation": (0, 0, 255),   # Red for violations
                 "mask": (255, 0, 255),      # Purple for mask
                 "goggles": (255, 255, 0),   # Cyan for goggles
@@ -487,6 +487,10 @@ class VideoProcessor:
             logger.debug(f"Drawing {len(detections)} detections")
             
             for detection in detections_sorted:
+                # Skip non-person detections to reduce visual clutter
+                if detection.get("std_class") != "person" and not detection.get("violation", False):
+                    continue
+                    
                 bbox = detection["bbox"]
                 label = detection["class"]
                 confidence = detection["confidence"]
@@ -501,12 +505,17 @@ class VideoProcessor:
                 x2 = max(0, min(x2, w - 1))
                 y2 = max(0, min(y2, h - 1))
                 
-                # Select color
+                # Select color and thickness for bounding box
                 if is_violation:
-                    color = color_map.get("violation", (0, 0, 255))
-                    thickness = 4  # Thicker for violations
+                    # Use bright red for violations with very thick lines
+                    color = (0, 0, 255)  # Bright red 
+                    thickness = 6  # Much thicker for better visibility
+                    
+                    # Draw a second outline to make it even more visible
+                    cv2.rectangle(annotated, (x1-2, y1-2), (x2+2, y2+2), (255, 255, 255), thickness+2)
                 else:
-                    color = color_map.get(label.lower(), (255, 255, 255))
+                    # Use standard color for non-violations
+                    color = color_map.get(label.lower(), (0, 255, 0))
                     thickness = 2
                 
                 # Draw bounding box
@@ -514,60 +523,97 @@ class VideoProcessor:
                 
                 # Create label text
                 if is_violation and violation_type:
-                    label_text = f"{label}: {violation_type.replace(',', ', ')} ({confidence:.2f})"
-                    # Add detected PPE if it's a person
+                    # More visible violation label
+                    label_text = f"VIOLATION: {violation_type.replace(',', ', ')} ({confidence:.2f})"
+                    
+                    # Show detected PPE for clarity
                     if detection.get("detected_ppe"):
                         ppe_list = ", ".join(detection["detected_ppe"])
                         label_text += f" | Has: {ppe_list}"
                 else:
+                    # Standard label for non-violations
                     label_text = f"{label}: {confidence:.2f}"
                 
                 # Get text dimensions
                 font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.6
+                font_scale = 0.65  # Larger font size
                 thickness_text = 2
                 text_size, baseline = cv2.getTextSize(label_text, font, font_scale, thickness_text)
                 
-                # Draw text background
-                text_background = (0, 0, 0) if is_violation else color
+                # Draw text background with larger margin
+                padding = 5  # Add padding around text
+                text_background = (0, 0, 0)  # Black background for all labels
+                
                 cv2.rectangle(
                     annotated,
-                    (x1, max(0, y1 - text_size[1] - 10)),
-                    (x1 + text_size[0] + 10, y1),
+                    (x1, max(0, y1 - text_size[1] - padding*2)),
+                    (x1 + text_size[0] + padding*2, y1),
                     text_background,
                     -1
                 )
+                
+                # Choose text color based on violation status
+                text_color = (255, 255, 255)  # White text for contrast
                 
                 # Draw text
                 cv2.putText(
                     annotated,
                     label_text,
-                    (x1 + 5, max(15, y1 - 5)),
+                    (x1 + padding, max(15, y1 - padding)),
                     font,
                     font_scale,
-                    (255, 255, 255),
+                    text_color,
                     thickness_text
                 )
                 
-                # Draw violation indicator
+                # Draw prominent violation indicator for violations
                 if is_violation:
-                    # Add warning triangle
-                    triangle_size = 20
+                    # Add warning triangle in top-right corner
+                    triangle_size = 30  # Larger triangle
                     triangle_points = np.array([
                         [x2 - triangle_size, y1],
                         [x2, y1],
                         [x2, y1 + triangle_size]
                     ], np.int32)
+                    
+                    # Fill triangle with vibrant red
                     cv2.fillPoly(annotated, [triangle_points], (0, 0, 255))
+                    
+                    # Draw "!" symbol in white
                     cv2.putText(
                         annotated,
                         "!",
-                        (x2 - 15, y1 + 15),
+                        (x2 - 20, y1 + 20),
                         font,
-                        0.7,
-                        (255, 255, 255),
-                        2
+                        0.9,  # Larger font
+                        (255, 255, 255),  # White for contrast
+                        3  # Thicker text
                     )
+                    
+                    # Draw missing PPE items list below the bounding box
+                    if detection.get("missing_ppe"):
+                        missing_ppe_text = f"Missing: {', '.join(detection['missing_ppe'])}"
+                        missing_text_size = cv2.getTextSize(missing_ppe_text, font, 0.6, 2)[0]
+                        
+                        # Background for missing PPE text
+                        cv2.rectangle(
+                            annotated,
+                            (x1, y2), 
+                            (x1 + missing_text_size[0] + 10, y2 + 25),
+                            (0, 0, 150),  # Dark red background
+                            -1
+                        )
+                        
+                        # Draw missing PPE text
+                        cv2.putText(
+                            annotated,
+                            missing_ppe_text,
+                            (x1 + 5, y2 + 18),
+                            font,
+                            0.6,
+                            (255, 255, 255),  # White text
+                            2
+                        )
             
             # Add comprehensive frame metadata
             return self._add_frame_metadata(annotated)
@@ -653,46 +699,58 @@ class VideoProcessor:
     def _process_detections(self, frame, detections) -> None:
         """Process detections to identify violations and generate alerts."""
         try:
-            # Filter for violations
-            violations = [d for d in detections if d.get("violation", False)]
+            # Filter for violations with better confidence filtering
+            violations = [d for d in detections if d.get("violation", False) and d.get("confidence", 0) > 0.5]
             
             if not violations:
                 return
             
             current_time = time.time()
             
-            # Rate limiting for alerts
-            if (current_time - self.last_alert_time) < 5.0:
+            # Rate limiting for alerts - global throttling to prevent alert storms
+            # Reduced from 5.0 to 2.0 seconds to allow for more responsive alerts
+            if (current_time - self.last_alert_time) < 2.0:
                 return
             
-            for violation in violations:
+            # Sort violations by confidence (highest first) to prioritize clear violations
+            sorted_violations = sorted(
+                violations, 
+                key=lambda x: x.get("confidence", 0), 
+                reverse=True
+            )
+            
+            # Process at most one alert per frame to prevent alert storms
+            for violation in sorted_violations:
                 violation_type = violation.get("violation_type", "Unknown violation")
                 confidence = violation.get("confidence", 0.0)
                 bbox = violation.get("bbox")
                 detected_ppe = violation.get("detected_ppe", [])
+                missing_ppe = violation.get("missing_ppe", [])
                 
-                # Skip if already alerted recently for this position
-                if bbox:
-                    person_id = f"{int(bbox[0]/10)},{int(bbox[1]/10)},{int(bbox[2]/10)},{int(bbox[3]/10)}"
-                    
-                    if person_id in self.violation_history:
-                        last_violation_time = self.violation_history[person_id]
-                        if (current_time - last_violation_time) < self.violation_timeout:
-                            logger.debug(f"Skipping repeated violation for same person: {violation_type}")
-                            continue
+                # Skip if confidence is too low - minimum 50% confidence for alerts
+                if confidence < 0.5:
+                    logger.debug(f"Skipping low confidence violation: {violation_type} ({confidence:.2f})")
+                    continue
                 
-                # Enhanced metadata
+                # Skip if no missing PPE items are identified
+                if not missing_ppe:
+                    logger.debug(f"Skipping violation with no missing PPE")
+                    continue
+                
+                # Enhanced metadata for better alert information
                 metadata = {
                     "session_id": self.session_id,
                     "frame_count": self.frame_count,
                     "detection_class": violation.get("class", ""),
                     "bbox": bbox,
                     "detected_ppe": detected_ppe,
+                    "missing_ppe": missing_ppe,
                     "fps": self.fps,
-                    "processing_fps": self.processing_fps
+                    "processing_fps": self.processing_fps,
+                    "confidence": confidence
                 }
                 
-                # Create alert
+                # Create alert - let the alert service handle duplicate checking
                 alert = self.alert_service.create_alert(
                     camera_id=self.camera_id,
                     violation_type=violation_type,
@@ -702,23 +760,12 @@ class VideoProcessor:
                     metadata=metadata
                 )
                 
+                # If an alert was created (not a duplicate), update our tracking
                 if alert:
                     self.last_alert_time = current_time
                     self.alert_count += 1
                     logger.info(f"Generated alert for camera {self.camera_id}: {violation_type} ({confidence:.2f})")
-                    
-                    # Update violation history
-                    if bbox:
-                        person_id = f"{int(bbox[0]/10)},{int(bbox[1]/10)},{int(bbox[2]/10)},{int(bbox[3]/10)}"
-                        self.violation_history[person_id] = current_time
-                        
-                        # Cleanup old entries periodically
-                        if self.alert_count % 10 == 0:
-                            for p_id in list(self.violation_history.keys()):
-                                if (current_time - self.violation_history[p_id]) > self.violation_timeout:
-                                    del self.violation_history[p_id]
-                    
-                    # Only create one alert at a time
+                    # Only process one alert at a time to prevent alert storms
                     break
                     
         except Exception as e:
@@ -795,3 +842,90 @@ def get_all_statuses() -> Dict[int, Dict]:
         camera_id: processor.get_status()
         for camera_id, processor in _active_processors.items()
     }
+
+def process_frame(self, frame):
+    """Process a single frame from the video stream."""
+    # Skip if paused
+    if self.paused:
+        return frame
+    
+    try:
+        # Process frame if model service is available
+        if not self.model_service:
+            logger.warning(f"Model service not available for camera {self.camera_id}")
+            return frame
+            
+        # Make a copy of the frame to avoid modifying the original
+        processed_frame = frame.copy()
+        
+        # Detect objects in the frame
+        start_time = time.time()
+        detections = self.model_service.detect(processed_frame)
+        elapsed = time.time() - start_time
+        
+        # Track processing FPS using exponential moving average
+        if self.processing_fps is None:
+            self.processing_fps = 1.0 / elapsed if elapsed > 0 else 30.0
+        else:
+            alpha = 0.1  # Smoothing factor
+            new_fps = 1.0 / elapsed if elapsed > 0 else 30.0
+            self.processing_fps = (1 - alpha) * self.processing_fps + alpha * new_fps
+
+        # Post-process detections to identify violations
+        detections = self.model_service.post_process(detections)
+        
+        # Process any identified violations/alerts
+        alerts = []
+        if self.alert_service:
+            alerts = self.alert_service.process_alerts(self.camera_id, detections, processed_frame)
+        
+        # Store the current detections
+        self.current_detections = detections
+        self.current_alerts = alerts
+        
+        # ALWAYS draw bounding boxes for real-time visualization
+        # Draw all detections with bounding boxes
+        for detection in detections:
+            try:
+                # Check if we have the necessary bbox data
+                if "bbox" not in detection:
+                    continue
+                
+                bbox = detection["bbox"]
+                if not bbox or len(bbox) != 4:
+                    continue
+                    
+                x1, y1, x2, y2 = map(int, bbox)
+                confidence = detection.get("confidence", 0)
+                class_name = detection.get("class", "")
+                
+                # Determine color based on violation status
+                if detection.get("violation", False):
+                    color = (0, 0, 255)  # Red for violations
+                else:
+                    color = (0, 255, 0)  # Green for non-violations
+                
+                # Draw bounding box
+                cv2.rectangle(processed_frame, (x1, y1), (x2, y2), color, 2)
+                
+                # Draw label
+                label = f"{class_name} {confidence:.2f}"
+                if detection.get("violation", False):
+                    label = f"VIOLATION: {detection.get('violation_type', 'unknown')}"
+                    
+                cv2.rectangle(processed_frame, (x1, y1 - 20), (x1 + len(label) * 10, y1), color, -1)
+                cv2.putText(processed_frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                
+            except Exception as e:
+                logger.error(f"Error drawing detection: {str(e)}")
+        
+        # Update the current frame
+        self.current_frame = processed_frame
+        
+        # Return the processed frame
+        return processed_frame
+        
+    except Exception as e:
+        logger.error(f"Error processing frame for camera {self.camera_id}: {str(e)}")
+        # Return the original frame on error
+        return frame

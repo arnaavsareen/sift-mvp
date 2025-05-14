@@ -11,6 +11,7 @@ import {
   FaExclamationTriangle,
   FaBell
 } from 'react-icons/fa';
+import { formatViolationType } from '../utils/formatting';
 
 const CameraDetail = () => {
   const { id } = useParams();
@@ -105,6 +106,20 @@ const CameraDetail = () => {
       console.error(`Error fetching alerts for camera ${cameraId}:`, err);
     }
   };
+  
+  // Periodically refresh alerts if not getting WebSocket updates
+  useEffect(() => {
+    if (camera && camera.id && isProcessing) {
+      // Set up polling for alerts as a fallback
+      const alertPollingInterval = setInterval(() => {
+        fetchAlerts(camera.id);
+      }, 5000); // Check every 5 seconds for new alerts
+      
+      return () => {
+        clearInterval(alertPollingInterval);
+      };
+    }
+  }, [camera, isProcessing]);
   
   // Load camera data
   useEffect(() => {
@@ -384,8 +399,24 @@ const CameraDetail = () => {
           // Reset error state
           setWsError(null);
         },
-        // onAlert handler (not used here, alerts handled separately)
-        null,
+        // onAlert handler - Process real-time alerts from WebSocket
+        (alertData) => {
+          console.log("Alert received from WebSocket:", alertData);
+          
+          // Update alerts in real-time without requiring a refresh
+          if (alertData) {
+            // Add the new alert to the beginning of the alerts array
+            setAlerts(prevAlerts => {
+              // Check if this alert is already in our list by ID
+              const alertExists = prevAlerts.some(alert => alert.id === alertData.id);
+              if (alertExists) {
+                return prevAlerts;
+              }
+              // Add the new alert at the beginning of the array
+              return [alertData, ...prevAlerts.slice(0, 4)];
+            });
+          }
+        },
         // onError handler
         (errorMsg) => {
           console.error(`WebSocket error for camera ${id}:`, errorMsg);
@@ -538,19 +569,37 @@ const CameraDetail = () => {
               onError={(e) => {
                 console.log("Image error occurred");
                 e.target.classList.add('hidden');
-                document.getElementById('camera-error-message')?.classList.remove('hidden');
-              }}
-              style={{
-                display: 'block', /* Always show unless explicitly hidden */
-                maxHeight: '100%',
-                maxWidth: '100%'
+                const loadingIndicator = document.getElementById('loading-indicator');
+                if (loadingIndicator) {
+                  loadingIndicator.classList.remove('hidden');
+                }
+                const errorMessage = document.getElementById('camera-error-message');
+                if (errorMessage) {
+                  errorMessage.classList.remove('hidden');
+                }
               }}
             />
-            <div 
-              id="loading-indicator" 
-              className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-50 z-10 hidden"
-            >
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
+            
+            {/* Loading indicator */}
+            <div id="loading-indicator" className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
+              <div className="text-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-500 mx-auto"></div>
+                <p className="mt-3 text-white">Loading video feed...</p>
+              </div>
+            </div>
+            
+            {/* Error message */}
+            <div id="camera-error-message" className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-90 hidden">
+              <div className="text-center p-6">
+                <FaExclamationTriangle className="mx-auto h-12 w-12 text-danger-500 mb-3" />
+                <p className="text-white mb-4">Unable to load video feed.</p>
+                <button
+                  onClick={retryStream}
+                  className="px-4 py-2 bg-primary-600 text-white rounded hover:bg-primary-700 transition-colors"
+                >
+                  Retry Connection
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -578,30 +627,6 @@ const CameraDetail = () => {
         {/* Timestamp */}
         <div className="absolute bottom-3 right-3 bg-black bg-opacity-50 px-2 py-1 rounded text-xs text-white">
           {new Date().toLocaleTimeString()}
-        </div>
-        
-        {/* Error message overlay (hidden by default) */}
-        <div id="camera-error-message" className="hidden absolute inset-0 flex flex-col items-center justify-center bg-gray-800 text-white">
-          <FaExclamationTriangle className="h-16 w-16 text-yellow-500 mb-4" />
-          <p className="text-xl font-medium text-center mb-2">Connection Error</p>
-          <p className="text-gray-400 max-w-md text-center mb-6">
-            {wsError || "Unable to load camera feed. The camera might be offline or the stream URL is invalid."}
-          </p>
-          <div className="flex space-x-4">
-            <button
-              onClick={retryStream}
-              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center space-x-2"
-            >
-              <span>Try Different Method</span>
-            </button>
-            <button
-              onClick={stopCamera}
-              className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 flex items-center space-x-2"
-            >
-              <FaStop className="h-4 w-4" />
-              <span>Stop Monitoring</span>
-            </button>
-          </div>
         </div>
       </>
     );
@@ -794,7 +819,7 @@ const CameraDetail = () => {
                           />
                           <div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-black/60 to-transparent text-white p-2">
                             <span className="px-2 py-0.5 bg-red-600/90 text-white text-xs font-semibold rounded uppercase">
-                              {alert.violation_type.replace(/_/g, ' ')}
+                              {formatViolationType(alert.violation_type)}
                             </span>
                           </div>
                           <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent text-white text-xs p-2">
@@ -830,9 +855,10 @@ const CameraDetail = () => {
                         <div className="flex items-center justify-between">
                           <div className="flex items-center">
                             <FaBell className="h-4 w-4 text-danger-500 mr-2" />
-                            <p className="text-sm font-medium text-gray-900">
-                              {alert.violation_type.replace(/_/g, " ")}
-                            </p>
+                            <div className="text-sm font-medium mb-1 text-danger-600 flex items-center gap-1">
+                              <FaExclamationTriangle className="h-3 w-3" />
+                              {formatViolationType(alert.violation_type)}
+                            </div>
                           </div>
                           <div className="flex items-center">
                             <span className={`px-2 py-0.5 text-xs rounded-full ${alert.resolved ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>

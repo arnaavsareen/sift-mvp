@@ -11,6 +11,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import asyncio
+import random
 
 from backend.models import Alert, Camera
 from backend.config import SCREENSHOTS_DIR
@@ -30,6 +31,10 @@ class AlertService:
         self.last_alert_times = {}
         self.consecutive_violation_threshold = 2  # Require 2 consecutive violations
         self.violation_counters = {}  # Track consecutive violations
+        
+        # Tracking for preventing duplicate alerts for the same person
+        self.person_violation_history = {}  # Track violations by person position
+        self.person_cooldown_period = 300  # 5 minutes (300 seconds)
         
         # Ensure screenshots directory exists
         os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
@@ -65,6 +70,7 @@ class AlertService:
         
         # Clean expired entries
         self._clean_alert_cache()
+        self._clean_person_violation_history()
         
         for violation in violations:
             violation_type = violation.get("violation_type", "unknown")
@@ -80,6 +86,21 @@ class AlertService:
             
             # Check for duplicate alerts
             if cache_key in self.alert_cache:
+                continue
+            
+            # Generate a person key to track this specific person's position
+            person_key = self._generate_person_key(camera_id, bbox)
+            
+            # Check if we've already alerted for this person within the cooldown period
+            if person_key in self.person_violation_history:
+                last_alert_time, last_violation_type = self.person_violation_history[person_key]
+                time_since_last_alert = (now - last_alert_time).total_seconds()
+                
+                # Skip if the same person had an alert within the cooldown period (5 minutes)
+                if time_since_last_alert < self.person_cooldown_period:
+                    # Only suppress if it's the same or similar violation type
+                    if self._is_similar_violation(violation_type, last_violation_type):
+                        logger.info(f"Skipping duplicate alert for person at {person_key} - last alert was {time_since_last_alert:.1f} seconds ago")
                 continue
             
             # Track consecutive violations for this position
@@ -105,6 +126,9 @@ class AlertService:
                 "timestamp": time.time(),
                 "alert_count": 1
             }
+            
+            # Record this person's violation to prevent duplicates within cooldown period
+            self.person_violation_history[person_key] = (now, violation_type)
             
             # Generate enhanced screenshot
             screenshot_path = self._save_enhanced_screenshot(
@@ -387,7 +411,7 @@ class AlertService:
         metadata: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Create a new safety violation alert with rate limiting.
+        Create a new safety violation alert with strict duplicate prevention.
         
         Args:
             camera_id: ID of the camera that detected the violation
@@ -403,11 +427,35 @@ class AlertService:
         try:
             # Check if we should create a new alert (rate limiting)
             current_time = time.time()
+            now = datetime.now()
+            
+            # Global rate limiting per camera (minimum time between any alerts)
             if camera_id in self.last_alert_times:
                 time_since_last = current_time - self.last_alert_times[camera_id]
                 if time_since_last < self.min_alert_interval:
                     logger.debug(f"Rate limiting alert for camera {camera_id} ({time_since_last:.1f}s < {self.min_alert_interval:.1f}s)")
                     return None
+            
+            # IMPORTANT: Check for duplicate person alert using the 5-minute cooldown
+            if bbox:
+                # Generate a unique key for this person's position
+                person_key = self._generate_person_key(camera_id, bbox)
+                
+                # Check if we've alerted for this person within the cooldown period
+                if person_key in self.person_violation_history:
+                    last_alert_time, last_violation_type = self.person_violation_history[person_key]
+                    time_since_last_alert = (now - last_alert_time).total_seconds()
+                    
+                    # Skip if the same person had an alert within the 5-minute cooldown period
+                    if time_since_last_alert < self.person_cooldown_period:
+                        # Only suppress if it's the same or similar violation type
+                        if self._is_similar_violation(violation_type, last_violation_type):
+                            logger.info(f"Suppressing duplicate alert for person at {person_key} - last alert was {time_since_last_alert:.1f} seconds ago")
+                            return None
+                
+                # If we get here, update the person violation history for future reference
+                self.person_violation_history[person_key] = (now, violation_type)
+                logger.debug(f"Updated person violation history for {person_key} with {violation_type}")
             
             # Get camera details
             camera = self.db.query(Camera).filter(Camera.id == camera_id).first()
@@ -429,15 +477,92 @@ class AlertService:
                 # Draw bounding box on the frame if coordinates are provided
                 if bbox:
                     x1, y1, x2, y2 = [int(coord) for coord in bbox]
-                    cv2.rectangle(alert_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
                     
-                    # Add violation type and confidence as text
-                    text = f"{violation_type}: {confidence:.2f}"
-                    cv2.putText(alert_frame, text, (x1, y1 - 10), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    # Draw thicker, more visible rectangle for the alert screenshot
+                    # White outline first for better visibility
+                    cv2.rectangle(alert_frame, (x1-3, y1-3), (x2+3, y2+3), (255, 255, 255), 3)
+                    # Then red rectangle for the violation
+                    cv2.rectangle(alert_frame, (x1, y1), (x2, y2), (0, 0, 255), 6)
+                    
+                    # Add violation type and confidence as text with better visibility
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    text = f"{violation_type.upper()}: {confidence:.2f}"
+                    
+                    # Measure text size for background
+                    text_size = cv2.getTextSize(text, font, 0.7, 2)[0]
+                    
+                    # Draw text background
+                    cv2.rectangle(
+                        alert_frame, 
+                        (x1, y1 - text_size[1] - 10), 
+                        (x1 + text_size[0] + 10, y1), 
+                        (0, 0, 0), 
+                        -1
+                    )
+                    
+                    # Draw text
+                    cv2.putText(
+                        alert_frame, 
+                        text, 
+                        (x1 + 5, y1 - 5),
+                        font, 
+                        0.7, 
+                        (255, 255, 255), 
+                        2
+                    )
+                    
+                    # Add missing PPE details if available in metadata
+                    if metadata and "missing_ppe" in metadata and metadata["missing_ppe"]:
+                        missing_text = f"Missing: {', '.join(metadata['missing_ppe'])}"
+                        missing_size = cv2.getTextSize(missing_text, font, 0.6, 2)[0]
+                        
+                        # Draw background for missing PPE text
+                        cv2.rectangle(
+                            alert_frame,
+                            (x1, y2),
+                            (x1 + missing_size[0] + 10, y2 + 25),
+                            (0, 0, 150),
+                            -1
+                        )
+                        
+                        # Draw missing PPE text
+                        cv2.putText(
+                            alert_frame,
+                            missing_text,
+                            (x1 + 5, y2 + 18),
+                            font,
+                            0.6,
+                            (255, 255, 255),
+                            2
+                        )
                 
-                # Save the frame as an image
-                cv2.imwrite(filepath, alert_frame)
+                # Add timestamp and camera info to the alert screenshot
+                h, w = alert_frame.shape[:2]
+                timestamp_text = f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Camera: {camera.name}"
+                
+                # Create dark overlay at the bottom
+                overlay_height = 40
+                overlay = alert_frame[h-overlay_height:h, 0:w].copy()
+                overlay = cv2.addWeighted(
+                    overlay, 0.5,
+                    np.zeros(overlay.shape, dtype=overlay.dtype) + np.array([0, 0, 50], dtype=np.uint8),
+                    0.5, 0
+                )
+                alert_frame[h-overlay_height:h, 0:w] = overlay
+                
+                # Add timestamp text
+                cv2.putText(
+                    alert_frame,
+                    timestamp_text,
+                    (10, h - 15),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 255),
+                    1
+                )
+                
+                # Save the frame as an image with high quality
+                cv2.imwrite(filepath, alert_frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
                 logger.info(f"Saved violation screenshot to {filepath}")
             else:
                 logger.warning("No frame provided for screenshot")
@@ -458,6 +583,10 @@ class AlertService:
             # Update last alert time
             self.last_alert_times[camera_id] = current_time
             
+            # Periodically clean up old history entries
+            if random.random() < 0.05:  # ~5% chance on each alert
+                self._clean_person_violation_history()
+            
             # Convert alert to dict for return and WebSocket broadcast
             alert_dict = {
                 "id": alert.id,
@@ -468,6 +597,10 @@ class AlertService:
                 "screenshot_url": f"/screenshots/{alert.screenshot_path}",
                 "resolved": alert.resolved
             }
+            
+            # Add metadata if available
+            if metadata:
+                alert_dict["metadata"] = metadata
             
             # Broadcast alert via WebSocket if available
             try:
@@ -603,6 +736,59 @@ class AlertService:
             "by_camera": alerts_by_camera if camera_id is None else None,
             "hourly_distribution": hourly_counts
         }
+
+    def _generate_person_key(self, camera_id: int, bbox: List[float]) -> str:
+        """
+        Generate a key to track a specific person's position in a camera view.
+        This uses a coarser grid than the cache key to account for slight movements.
+        """
+        # Use a coarser grid (divide by 20 instead of 10) for person tracking
+        # to better handle slight movements of the same person
+        if not bbox or len(bbox) != 4:
+            return f"camera_{camera_id}_unknown_position"
+            
+        x1, y1, x2, y2 = bbox
+        # Calculate center point of the bounding box
+        center_x = (x1 + x2) / 2
+        center_y = (y1 + y2) / 2
+        # Create a coarse grid position (20 pixel grid)
+        grid_x = int(center_x / 20)
+        grid_y = int(center_y / 20)
+        
+        return f"camera_{camera_id}_pos_{grid_x}_{grid_y}"
+    
+    def _is_similar_violation(self, violation_type1: str, violation_type2: str) -> bool:
+        """
+        Check if two violation types are similar enough to be considered the same
+        for purposes of duplicate prevention.
+        """
+        # If they're exactly the same, they're similar
+        if violation_type1 == violation_type2:
+            return True
+            
+        # Split comma-separated violation types and check for overlaps
+        types1 = set(t.strip().lower() for t in violation_type1.split(','))
+        types2 = set(t.strip().lower() for t in violation_type2.split(','))
+        
+        # If there's any overlap in violation types, consider them similar
+        return len(types1.intersection(types2)) > 0
+    
+    def _clean_person_violation_history(self) -> None:
+        """
+        Clean up expired entries from the person violation history.
+        """
+        now = datetime.now()
+        keys_to_remove = []
+        
+        for person_key, (alert_time, _) in self.person_violation_history.items():
+            if (now - alert_time).total_seconds() > self.person_cooldown_period:
+                keys_to_remove.append(person_key)
+                
+        for key in keys_to_remove:
+            del self.person_violation_history[key]
+        
+        if keys_to_remove:
+            logger.debug(f"Cleaned {len(keys_to_remove)} expired entries from person violation history")
 
 
 # Factory function to create alert service

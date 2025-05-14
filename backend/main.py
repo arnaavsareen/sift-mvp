@@ -10,6 +10,8 @@ import base64
 import asyncio
 from typing import Dict, List
 import queue
+import uuid
+from datetime import datetime
 
 from backend.database import get_db, engine
 from backend.models import Base
@@ -243,12 +245,21 @@ async def broadcast_alert(camera_id: int, alert_data: dict):
     # Make a copy of the connections list since we might modify it during iteration
     connections = list(active_connections[camera_id])
     
+    # Ensure the alert data has all required fields
+    if 'id' not in alert_data:
+        alert_data['id'] = str(uuid.uuid4())  # Generate ID if missing
+    
+    if 'created_at' not in alert_data and 'timestamp' not in alert_data:
+        alert_data['created_at'] = datetime.now().isoformat()
+    
+    sent_count = 0
     for connection in connections:
         try:
             await connection.send_json({
                 "type": "alert",
                 "data": alert_data
             })
+            sent_count += 1
             logger.debug(f"Alert sent to a connection for camera {camera_id}")
         except WebSocketDisconnect:
             logger.info(f"WebSocket disconnected while broadcasting alert for camera {camera_id}")
@@ -265,6 +276,8 @@ async def broadcast_alert(camera_id: int, alert_data: dict):
                 if camera_id in active_connections and connection in active_connections[camera_id]:
                     active_connections[camera_id].remove(connection)
                     logger.info(f"Removed dead WebSocket connection for camera {camera_id}")
+    
+    logger.info(f"Successfully sent alert to {sent_count}/{connection_count} connections for camera {camera_id}")
 
 @app.get("/api/health")
 def health_check():
