@@ -18,6 +18,8 @@ services:
       - CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.15}
       # Important for WebSocket connections
       - WS_URL=ws://localhost:${BACKEND_PORT:-8000}/ws
+      # Set to true to generate mock data during container startup
+      - GENERATE_MOCK_DATA=${GENERATE_MOCK_DATA:-true}
     depends_on:
       - db
     restart: unless-stopped
@@ -41,7 +43,8 @@ services:
       - .env
     environment:
       - REACT_APP_API_URL=/api
-      - REACT_APP_WS_URL=ws://localhost/ws
+      # Fix the WebSocket URL to avoid double path issues - remove the trailing /ws
+      - REACT_APP_WS_URL=ws://localhost
     depends_on:
       - backend
     restart: unless-stopped

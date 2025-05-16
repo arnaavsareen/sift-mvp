@@ -354,7 +354,7 @@ const CameraDetail = () => {
     const errorMessage = document.getElementById('camera-error-message');
     
     if (frameImg) {
-      console.log("Setting up WebSocket streaming mode");
+      console.log(`Setting up WebSocket streaming mode for camera ${id}`);
       setWsError("Connecting via WebSocket for frame-by-frame streaming...");
       
       // Force loading indicator to show until first frame arrives
@@ -371,8 +371,9 @@ const CameraDetail = () => {
       }
       
       // Initialize WebSocket for real-time frame streaming with enhanced options
+      // Ensure we're using the current camera ID from URL parameters (id)
       wsRef.current = websocketApi.createCameraStream(
-        id,
+        id, // Use the current camera ID from URL parameters
         // onFrame handler
         (frameData, timestamp) => {
           if (!frameImg || !frameData) return;

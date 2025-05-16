@@ -27,9 +27,13 @@ export const websocketApi = {
   // Create a camera stream connection
   createCameraStream: (cameraId, onFrame, onAlert, onError, onClose, options = {}) => {
     const createWebSocket = () => {
-      // Create a new WebSocket connection
-      console.log(`Connecting to WebSocket at: ${WS_URL}/ws/cameras/${cameraId}/stream`);
-      const ws = new WebSocket(`${WS_URL}/ws/cameras/${cameraId}/stream`);
+      // Create a new WebSocket connection - Fix the URL construction to avoid the double '/ws/ws/' path
+      // Extract the base URL without the '/ws' suffix
+      const baseWsUrl = WS_URL.endsWith('/ws') ? WS_URL.substring(0, WS_URL.length - 3) : WS_URL;
+      const wsUrl = `${baseWsUrl}/ws/cameras/${cameraId}/stream`;
+      
+      console.log(`Connecting to WebSocket at: ${wsUrl}`);
+      const ws = new WebSocket(wsUrl);
       
       // Connection status
       let wasConnected = false;

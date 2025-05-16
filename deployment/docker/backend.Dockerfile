@@ -35,8 +35,22 @@ COPY . .
 RUN mkdir -p /app/data/models /app/data/screenshots /tmp/rtsp_stream && \
     chmod -R 755 /app
 
+# Create entrypoint script
+RUN echo '#!/bin/bash\n\
+echo "Checking if mock data should be generated..."\n\
+if [ "$GENERATE_MOCK_DATA" = "true" ]; then\n\
+    echo "Generating mock data for YC demo..."\n\
+    python /app/backend/scripts/generate_mock_data.py\n\
+    python /app/backend/scripts/generate_mock_screenshots.py\n\
+    echo "Mock data generation complete!"\n\
+fi\n\
+\n\
+# Start the API server\n\
+exec uvicorn backend.main:app --host 0.0.0.0 --port 8000\n\
+' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+
 # Expose port
 EXPOSE 8000
 
-# Command to run the application
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Use our entrypoint script
+ENTRYPOINT ["/app/entrypoint.sh"]

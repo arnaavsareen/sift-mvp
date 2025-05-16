@@ -65,6 +65,38 @@ docker-compose up -d
    - Backend API: http://localhost:8000/api
    - API Documentation: http://localhost:8000/docs
 
+## YC Demo Mode with Mock Data
+
+For demo purposes, you can automatically populate the dashboard with realistic mock data:
+
+1. The system is configured to generate mock data by default when using Docker Compose.
+
+2. To control mock data generation, use the `GENERATE_MOCK_DATA` environment variable:
+
+```bash
+# Enable mock data generation (default)
+GENERATE_MOCK_DATA=true docker-compose up -d
+
+# Disable mock data generation
+GENERATE_MOCK_DATA=false docker-compose up -d
+```
+
+3. To manually generate mock data after startup:
+
+```bash
+# Generate mock data in a running container
+docker exec -it sift-mvp-backend-1 python /app/backend/scripts/generate_mock_data.py
+docker exec -it sift-mvp-backend-1 python /app/backend/scripts/generate_mock_screenshots.py
+```
+
+The mock data includes:
+- Multiple cameras with different locations
+- Safety violation alerts with timestamps
+- Realistic alert patterns (more during work hours)
+- Mock screenshots for visual display
+
+For more details, see [Mock Data Generation Documentation](backend/scripts/README.md).
+
 ## Development Setup
 
 ### Backend
